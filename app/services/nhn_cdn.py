@@ -1,0 +1,197 @@
+"""
+NHN Cloud CDN service integration.
+Handles CDN URL generation with Auth Token authentication.
+
+Auth Token API 참고:
+https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-token-api
+"""
+import time
+from typing import Optional, List
+
+import httpx
+
+from app.config import get_settings
+
+
+class NHNCDNService:
+    """
+    Service for generating CDN URLs with Auth Token.
+    NHN Cloud CDN Auth Token API를 사용하여 토큰을 생성합니다.
+    
+    Auth Token 생성 흐름:
+    1. POST /v2.0/appKeys/{appKey}/auth-token 호출
+    2. 응답에서 singlePathToken 추출
+    3. URL에 ?token={token} 형태로 붙임
+    """
+    
+    # NHN Cloud CDN API 엔드포인트
+    CDN_API_URL = "https://cdn.api.nhncloudservice.com"
+    
+    def __init__(self):
+        self.settings = get_settings()
+        self._token_cache: dict[str, tuple[str, float]] = {}  # path -> (token, expire_time)
+    
+    async def _request_auth_token(
+        self,
+        path: str,
+        duration_seconds: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        NHN Cloud CDN API를 호출하여 Auth Token을 생성합니다.
+        
+        Args:
+            path: CDN 경로 (예: "/photo/photos/1/xxx.jpg")
+            duration_seconds: 토큰 유효 시간 (초)
+            
+        Returns:
+            생성된 토큰 문자열, 실패시 None
+        """
+        if not self.settings.nhn_cdn_app_key:
+            print("[CDN] App Key가 설정되지 않았습니다.")
+            return None
+        
+        if duration_seconds is None:
+            duration_seconds = self.settings.nhn_cdn_token_expire_seconds
+        
+        # Ensure path starts with /
+        if not path.startswith("/"):
+            path = f"/{path}"
+        
+        url = f"{self.CDN_API_URL}/v2.0/appKeys/{self.settings.nhn_cdn_app_key}/auth-token"
+        
+        # encryptKey: Token Encryption Key (encrypt_key가 없으면 secret_key 사용)
+        encrypt_key = self.settings.nhn_cdn_encrypt_key or self.settings.nhn_cdn_secret_key
+        
+        payload = {
+            "encryptKey": encrypt_key,
+            "durationSeconds": duration_seconds,
+            "singlePath": path,
+        }
+        
+        # NHN Cloud API 인증 헤더 (Secret Key 사용)
+        headers = {
+            "Content-Type": "application/json",
+        }
+        # Secret Key가 있으면 Authorization 헤더 추가
+        if self.settings.nhn_cdn_secret_key:
+            headers["Authorization"] = self.settings.nhn_cdn_secret_key
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, headers=headers)
+                
+                data = response.json()
+                print(f"[CDN] API Response: {data}")
+                
+                if data.get("header", {}).get("isSuccessful"):
+                    token = data.get("authToken", {}).get("singlePathToken")
+                    return token
+                else:
+                    print(f"[CDN] Auth Token 생성 실패: {data}")
+                    return None
+                    
+        except httpx.HTTPError as e:
+            print(f"[CDN] Auth Token API 호출 실패: {e}")
+            return None
+    
+    async def generate_auth_token_url(
+        self,
+        object_path: str,
+        expires_in: Optional[int] = None,
+    ) -> str:
+        """
+        Generate a CDN URL with Auth Token for secure access.
+        
+        Args:
+            object_path: The path to the object in storage (e.g., "photos/uuid.jpg")
+            expires_in: Token expiration time in seconds (default from settings)
+            
+        Returns:
+            CDN URL with auth token parameter
+        """
+        # CDN 도메인이나 App Key가 설정되지 않은 경우 Object Storage URL 직접 반환
+        if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
+            return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+        
+        if expires_in is None:
+            expires_in = self.settings.nhn_cdn_token_expire_seconds
+        
+        # CDN 경로 생성 (컨테이너 포함)
+        # Object Storage 경로: image/{album_id}/{filename}
+        # CDN 경로: /{container}/image/{album_id}/{filename}
+        # 이렇게 하면 CDN 원본 설정에서 경로 변환이 필요 없음
+        container = self.settings.nhn_storage_container
+        if object_path.startswith("/"):
+            object_path = object_path[1:]  # 앞의 / 제거
+        
+        # 컨테이너가 이미 경로에 포함되어 있는지 확인
+        if object_path.startswith(f"{container}/"):
+            cdn_path = f"/{object_path}"
+        else:
+            cdn_path = f"/{container}/{object_path}"
+        
+        # 캐시 확인
+        cache_key = cdn_path
+        if cache_key in self._token_cache:
+            cached_token, expire_time = self._token_cache[cache_key]
+            if time.time() < expire_time - 60:  # 1분 여유
+                return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
+        
+        # Auth Token 생성
+        token = await self._request_auth_token(cdn_path, expires_in)
+        
+        if token:
+            # 캐시 저장
+            self._token_cache[cache_key] = (token, time.time() + expires_in)
+            return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={token}"
+        else:
+            # 토큰 생성 실패시 Object Storage URL 반환
+            return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+    
+    def generate_auth_token_url_sync(
+        self,
+        object_path: str,
+        expires_in: Optional[int] = None,
+    ) -> str:
+        """
+        동기 버전: CDN URL 생성 (토큰 없이, Object Storage fallback)
+        PhotoService.get_photo_with_url에서 동기적으로 호출할 때 사용
+        
+        CDN App Key가 없으면 Object Storage URL 반환
+        """
+        # CDN 설정이 없으면 Object Storage URL 반환
+        if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
+            return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+        
+        # CDN 경로 생성 (컨테이너 포함)
+        container = self.settings.nhn_storage_container
+        if object_path.startswith("/"):
+            object_path = object_path[1:]  # 앞의 / 제거
+        
+        # 컨테이너가 이미 경로에 포함되어 있는지 확인
+        if object_path.startswith(f"{container}/"):
+            cdn_path = f"/{object_path}"
+        else:
+            cdn_path = f"/{container}/{object_path}"
+        
+        # 캐시에서 토큰 확인
+        cache_key = cdn_path
+        if cache_key in self._token_cache:
+            cached_token, expire_time = self._token_cache[cache_key]
+            if time.time() < expire_time - 60:
+                return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
+        
+        # 캐시에 없으면 Object Storage URL 반환 (비동기 토큰 생성 필요)
+        return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+
+
+# Singleton instance
+_cdn_service: Optional[NHNCDNService] = None
+
+
+def get_cdn_service() -> NHNCDNService:
+    """Get the singleton CDN service instance."""
+    global _cdn_service
+    if _cdn_service is None:
+        _cdn_service = NHNCDNService()
+    return _cdn_service
