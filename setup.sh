@@ -16,6 +16,9 @@ SERVICE_USER="${SUDO_USER:-$USER}"
 SERVICE_HOME="/opt/photo-api"
 SERVICE_NAME="photo-api"
 
+# 환경 모드 (DEV 또는 PRODUCTION, 기본값: DEV)
+ENVIRONMENT="${ENVIRONMENT:-DEV}"
+
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}백엔드 VM 배포 스크립트${NC}"
 echo -e "${GREEN}========================================${NC}"
@@ -101,15 +104,29 @@ echo -e "${GREEN}✅ 의존성 설치 완료${NC}"
 
 # 6. .env 파일 확인
 echo -e "${YELLOW}[7/8] 환경 변수 파일 확인 중...${NC}"
+echo -e "${YELLOW}환경 모드: ${ENVIRONMENT}${NC}"
+
 if [ ! -f ".env" ]; then
     echo -e "${YELLOW}⚠️  .env 파일이 없습니다.${NC}"
     echo "기본 .env 파일을 생성합니다..."
     
-    sudo -u "$SERVICE_USER" cat > .env << 'EOF'
+    # 환경 모드에 따라 DEBUG 설정
+    if [ "$ENVIRONMENT" = "PRODUCTION" ]; then
+        DEBUG_VALUE="False"
+        ENV_MODE="PRODUCTION"
+    else
+        DEBUG_VALUE="True"
+        ENV_MODE="DEV"
+    fi
+    
+    sudo -u "$SERVICE_USER" cat > .env << EOF
+# Environment
+ENVIRONMENT=${ENV_MODE}
+
 # Application
 APP_NAME=Photo API
 APP_VERSION=1.0.0
-DEBUG=False
+DEBUG=${DEBUG_VALUE}
 SECRET_KEY=change-me-in-production
 
 # Database
@@ -143,10 +160,15 @@ NHN_LOG_VERSION=v2
 NHN_LOG_PLATFORM=API
 EOF
     
-    echo -e "${YELLOW}⚠️  .env 파일을 생성했습니다. 필수 환경 변수를 설정해주세요.${NC}"
+    echo -e "${YELLOW}⚠️  .env 파일을 생성했습니다 (환경: ${ENV_MODE}). 필수 환경 변수를 설정해주세요.${NC}"
     echo "  nano $SERVICE_HOME/.env"
 else
     echo -e "${GREEN}✅ .env 파일 존재함${NC}"
+    # 기존 .env 파일에 ENVIRONMENT가 없으면 추가
+    if ! grep -q "^ENVIRONMENT=" .env; then
+        echo "ENVIRONMENT=${ENVIRONMENT}" >> .env
+        echo -e "${YELLOW}⚠️  .env 파일에 ENVIRONMENT 변수를 추가했습니다.${NC}"
+    fi
 fi
 
 # 7. systemd 서비스 파일 생성

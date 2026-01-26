@@ -1,0 +1,184 @@
+name: Deploy to NHN Cloud
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - dev
+      - release
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 태그 정보를 위해 전체 히스토리 필요
+
+      - name: Determine deployment context
+        id: context
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            BINARY_GROUP="dev"
+            ENVIRONMENT="DEV"
+          elif [[ "${{ github.ref }}" == refs/heads/release ]]; then
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+            if [ -z "$VERSION" ]; then
+              echo "::error::Version not found. Ensure a version tag exists or is mentioned in commit message."
+              exit 1
+            fi
+            BINARY_GROUP="release"
+            ENVIRONMENT="PRODUCTION"
+          else
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+            BINARY_GROUP="dev"
+            ENVIRONMENT="DEV"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "binary_group=$BINARY_GROUP" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          
+          echo "📦 Version: $VERSION"
+          echo "🎯 Binary Group: $BINARY_GROUP"
+          echo "🌍 Environment: $ENVIRONMENT"
+
+      - name: Create deployment package
+        run: |
+          set -e
+          
+          mkdir -p deploy-package
+          
+          # rsync로 효율적으로 파일 복사 (.env 제외)
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.env*' \
+            --exclude='venv' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            --exclude='*.db' \
+            --exclude='*.sqlite' \
+            --exclude='*.log' \
+            --exclude='.DS_Store' \
+            --exclude='deploy-package' \
+            --exclude='*.tar.gz' \
+            --exclude='*.zip' \
+            --exclude='.vscode' \
+            --exclude='.idea' \
+            ./ deploy-package/
+          
+          # 환경별 .env 템플릿 생성
+          DEBUG_VALUE=$([ "${{ steps.context.outputs.environment }}" == "PRODUCTION" ] && echo "False" || echo "True")
+          
+          cat > deploy-package/.env.template << EOF
+# Environment
+ENVIRONMENT=${{ steps.context.outputs.environment }}
+
+# Application
+APP_NAME=Photo API
+APP_VERSION=1.0.0
+DEBUG=${DEBUG_VALUE}
+SECRET_KEY=change-me-in-production
+
+# Database
+DATABASE_URL=sqlite+aiosqlite:///./photo_api.db
+
+# JWT
+JWT_SECRET_KEY=jwt-secret-change-in-production
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# NHN Cloud Object Storage
+NHN_STORAGE_IAM_USER=
+NHN_STORAGE_IAM_PASSWORD=
+NHN_STORAGE_PROJECT_ID=
+NHN_STORAGE_TENANT_ID=
+NHN_STORAGE_AUTH_URL=https://api-identity-infrastructure.nhncloudservice.com/v2.0
+NHN_STORAGE_URL=https://api-storage.nhncloudservice.com/v1
+NHN_STORAGE_CONTAINER=photo-container
+
+# NHN Cloud CDN
+NHN_CDN_DOMAIN=
+NHN_CDN_APP_KEY=
+NHN_CDN_SECRET_KEY=
+NHN_CDN_ENCRYPT_KEY=
+NHN_CDN_TOKEN_EXPIRE_SECONDS=3600
+
+# NHN Cloud Log & Crash
+NHN_LOG_APPKEY=
+NHN_LOG_URL=https://api-logncrash.nhncloudservice.com/v2/log
+NHN_LOG_VERSION=v2
+NHN_LOG_PLATFORM=API
+EOF
+          
+          # 압축 파일 생성
+          cd deploy-package
+          tar -czf ../photo-api-${{ steps.context.outputs.version }}.tar.gz .
+          cd ..
+          
+          # 파일 크기 확인
+          ls -lh photo-api-${{ steps.context.outputs.version }}.tar.gz
+
+      - name: Upload binary to NHN Cloud Deploy
+        env:
+          NHN_CLOUD_APP_KEY: ${{ secrets.NHN_CLOUD_APP_KEY }}
+          NHN_CLOUD_ARTIFACT_ID: ${{ secrets.NHN_CLOUD_ARTIFACT_ID }}
+          NHN_CLOUD_BINARY_GROUP_ID_DEV: ${{ secrets.NHN_CLOUD_BINARY_GROUP_ID_DEV }}
+          NHN_CLOUD_BINARY_GROUP_ID_RELEASE: ${{ secrets.NHN_CLOUD_BINARY_GROUP_ID_RELEASE }}
+          NHN_CLOUD_AUTH_ID: ${{ secrets.NHN_CLOUD_AUTH_ID }}
+          NHN_CLOUD_AUTH_SECRET: ${{ secrets.NHN_CLOUD_AUTH_SECRET }}
+        run: |
+          set -e
+          
+          # Binary Group ID 선택
+          if [[ "${{ steps.context.outputs.binary_group }}" == "release" ]]; then
+            BINARY_GROUP_ID="${NHN_CLOUD_BINARY_GROUP_ID_RELEASE}"
+          else
+            BINARY_GROUP_ID="${NHN_CLOUD_BINARY_GROUP_ID_DEV}"
+          fi
+          
+          if [ -z "$BINARY_GROUP_ID" ]; then
+            echo "::error::Binary Group ID not found for ${{ steps.context.outputs.binary_group }}"
+            exit 1
+          fi
+          
+          PACKAGE_FILE="photo-api-${{ steps.context.outputs.version }}.tar.gz"
+          
+          echo "📤 Uploading to ${{ steps.context.outputs.binary_group }} binary group..."
+          echo "📦 Version: ${{ steps.context.outputs.version }}"
+          echo "📁 File: $PACKAGE_FILE"
+          
+          # NHN Cloud Deploy Binary API 호출
+          RESPONSE=$(curl -sSf -X POST \
+            --max-time 300 \
+            "https://api-tcd.nhncloudservice.com/api/v1.0/projects/${NHN_CLOUD_APP_KEY}/artifacts/${NHN_CLOUD_ARTIFACT_ID}/binary-groups/${BINARY_GROUP_ID}/binaries" \
+            -H "X-TC-AUTHENTICATION-ID: ${NHN_CLOUD_AUTH_ID}" \
+            -H "X-TC-AUTHENTICATION-SECRET: ${NHN_CLOUD_AUTH_SECRET}" \
+            -F "file=@${PACKAGE_FILE}" \
+            -F "version=${{ steps.context.outputs.version }}" \
+            -F "description=Auto-deployed from GitHub Actions (${{ steps.context.outputs.binary_group }}) on $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)")
+          
+          # 응답 확인
+          if echo "$RESPONSE" | grep -q '"isSuccess" *: *true'; then
+            echo "✅ Binary uploaded successfully"
+            echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+          else
+            echo "::error::Binary upload failed"
+            echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+            exit 1
+          fi
+
+      - name: Upload artifact (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package-${{ steps.context.outputs.binary_group }}-${{ steps.context.outputs.version }}
+          path: photo-api-${{ steps.context.outputs.version }}.tar.gz
+          retention-days: 7

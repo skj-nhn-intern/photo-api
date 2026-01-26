@@ -173,3 +173,17 @@ async def root():
         "version": settings.app_version,
         "docs": "/docs",
     }
+
+
+# Health check endpoint
+@app.get(
+    "/health",
+    tags=["Health"],
+    summary="Health check",
+)
+async def health_check():
+    """
+    Health check endpoint for load balancer.
+    Returns 200 OK if the service is running.
+    """
+    return {"status": "healthy"}
