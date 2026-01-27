@@ -14,8 +14,16 @@ GitHub 저장소의 Settings → Secrets and variables → Actions에서 다음 
 - `NHN_CLOUD_ARTIFACT_ID`: Artifact ID
 - `NHN_CLOUD_BINARY_GROUP_ID_DEV`: dev-api-server Binary Group ID
 - `NHN_CLOUD_BINARY_GROUP_ID_RELEASE`: release-api-server Binary Group ID
-- `NHN_CLOUD_AUTH_ID`: API 인증 ID (User Access Key ID)
-- `NHN_CLOUD_AUTH_SECRET`: API 인증 Secret (Secret Access Key)
+- `NHN_CLOUD_AUTH_ID`: API 인증 ID (NHN Cloud Deploy 콘솔의 API 보안 설정에서 발급)
+- `NHN_CLOUD_AUTH_SECRET`: API 인증 Secret (NHN Cloud Deploy 콘솔의 API 보안 설정에서 발급)
+
+**NHN_CLOUD_AUTH_ID와 SECRET 발급 방법:**
+1. NHN Cloud 콘솔 접속
+2. Dev Tools → Deploy 서비스 선택
+3. 프로젝트 선택
+4. **API 보안 설정** 메뉴로 이동
+5. **User Access Key ID**와 **Secret Access Key** 생성/확인
+6. 생성된 값을 GitHub Secrets에 저장
 
 ### 2. Binary Group 생성
 
