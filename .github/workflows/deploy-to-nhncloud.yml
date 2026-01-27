@@ -118,27 +118,65 @@ jobs:
           
           PACKAGE_FILE="photo-api-${{ steps.context.outputs.version }}.tar.gz"
           
+          # 파일 존재 확인
+          if [ ! -f "$PACKAGE_FILE" ]; then
+            echo "::error::Package file not found: $PACKAGE_FILE"
+            ls -lh *.tar.gz 2>/dev/null || echo "No tar.gz files found"
+            exit 1
+          fi
+          
+          # 파일 크기 확인
+          FILE_SIZE=$(stat -f%z "$PACKAGE_FILE" 2>/dev/null || stat -c%s "$PACKAGE_FILE" 2>/dev/null || echo "unknown")
           echo "📤 Uploading to ${{ steps.context.outputs.binary_group }} binary group..."
           echo "📦 Version: ${{ steps.context.outputs.version }}"
-          echo "📁 File: $PACKAGE_FILE"
+          echo "📁 File: $PACKAGE_FILE (Size: $FILE_SIZE bytes)"
+          echo "🔑 App Key: ${NHN_CLOUD_APP_KEY:0:10}..." # 처음 10자만 표시
+          echo "🔑 Artifact ID: ${NHN_CLOUD_ARTIFACT_ID:0:10}..." # 처음 10자만 표시
+          echo "🔑 Binary Group ID: ${BINARY_GROUP_ID:0:10}..." # 처음 10자만 표시
           
-          # NHN Cloud Deploy Binary API 호출
-          RESPONSE=$(curl -sSf -X POST \
+          # API URL 구성
+          API_URL="https://api-tcd.nhncloudservice.com/api/v1.0/projects/${NHN_CLOUD_APP_KEY}/artifacts/${NHN_CLOUD_ARTIFACT_ID}/binary-groups/${BINARY_GROUP_ID}/binaries"
+          echo "🌐 API URL: ${API_URL}"
+          
+          # NHN Cloud Deploy Binary API 호출 (상세 로그 포함)
+          set +e  # 에러 발생해도 계속 진행
+          RESPONSE=$(curl -v -X POST \
             --max-time 300 \
-            "https://api-tcd.nhncloudservice.com/api/v1.0/projects/${NHN_CLOUD_APP_KEY}/artifacts/${NHN_CLOUD_ARTIFACT_ID}/binary-groups/${BINARY_GROUP_ID}/binaries" \
+            --fail-with-body \
+            --write-out "\nHTTP Status: %{http_code}\nTotal Time: %{time_total}s\n" \
+            "$API_URL" \
             -H "X-TC-AUTHENTICATION-ID: ${NHN_CLOUD_AUTH_ID}" \
             -H "X-TC-AUTHENTICATION-SECRET: ${NHN_CLOUD_AUTH_SECRET}" \
             -F "file=@${PACKAGE_FILE}" \
             -F "version=${{ steps.context.outputs.version }}" \
-            -F "description=Auto-deployed from GitHub Actions (${{ steps.context.outputs.binary_group }}) on $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)")
+            -F "description=Auto-deployed from GitHub Actions (${{ steps.context.outputs.binary_group }}) on $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)" \
+            2>&1)
           
-          # 응답 확인
-          if echo "$RESPONSE" | grep -q '"isSuccess" *: *true'; then
+          CURL_EXIT_CODE=$?
+          HTTP_CODE=$(echo "$RESPONSE" | grep -oP 'HTTP Status: \K\d+' || echo "unknown")
+          set -e
+          
+          echo "--- curl Response ---"
+          echo "$RESPONSE"
+          echo "--- End Response ---"
+          
+          # HTTP 상태 코드 확인
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+            echo "::error::API call failed with HTTP $HTTP_CODE"
+            echo "::error::Curl exit code: $CURL_EXIT_CODE"
+            echo "::error::Check API URL, authentication, and parameters"
+            exit 1
+          fi
+          
+          # 응답 본문에서 성공 여부 확인
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed -n '/^{/,$p' | head -1)
+          if echo "$RESPONSE_BODY" | grep -q '"isSuccess" *: *true'; then
             echo "✅ Binary uploaded successfully"
-            echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+            echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
           else
-            echo "::error::Binary upload failed"
-            echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+            echo "::error::Binary upload failed - API returned isSuccess: false"
+            echo "Response body:"
+            echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
             exit 1
           fi
 
