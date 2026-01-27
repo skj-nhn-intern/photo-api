@@ -82,6 +82,12 @@ sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_HOME"
 echo "애플리케이션 파일 복사 중..."
 sudo -u "$SERVICE_USER" cp -r "$SCRIPT_DIR"/* "$SERVICE_HOME/" 2>/dev/null || \
 sudo cp -r "$SCRIPT_DIR"/* "$SERVICE_HOME/"
+
+# scripts 디렉토리 생성 및 권한 설정
+if [ -d "$SERVICE_HOME/scripts" ]; then
+    sudo chmod +x "$SERVICE_HOME/scripts"/*.sh 2>/dev/null || true
+fi
+
 sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_HOME"
 
 cd "$SERVICE_HOME"
@@ -171,8 +177,15 @@ else
     fi
 fi
 
-# 7. systemd 서비스 파일 생성
-echo -e "${YELLOW}[8/8] systemd 서비스 설정 중...${NC}"
+# 7. 로그 디렉토리 생성
+echo -e "${YELLOW}[8/8] 로그 디렉토리 설정 중...${NC}"
+LOG_DIR="/var/log/${SERVICE_NAME}"
+sudo mkdir -p "$LOG_DIR"
+sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
+echo -e "${GREEN}✅ 로그 디렉토리 생성 완료: $LOG_DIR${NC}"
+
+# 8. systemd 서비스 파일 생성
+echo -e "${YELLOW}[9/9] systemd 서비스 설정 중...${NC}"
 
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -191,9 +204,15 @@ Environment="PYTHONUNBUFFERED=1"
 ExecStart=$SERVICE_HOME/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=10
+
+# 로그 설정: journald와 파일 모두 저장
+# Python logging이 파일과 stdout 모두에 출력하므로,
+# stdout/stderr는 journald로, 파일은 직접 저장됨
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$SERVICE_NAME
+SyslogFacility=daemon
+SyslogLevel=info
 
 # 보안 설정
 NoNewPrivileges=true
@@ -202,6 +221,26 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# logrotate 설정 파일 생성
+LOGROTATE_FILE="/etc/logrotate.d/${SERVICE_NAME}"
+sudo tee "$LOGROTATE_FILE" > /dev/null << EOF
+$LOG_DIR/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 $SERVICE_USER $SERVICE_USER
+    sharedscripts
+    postrotate
+        systemctl reload $SERVICE_NAME > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+echo -e "${GREEN}✅ Logrotate 설정 완료${NC}"
 
 # systemd 재로드
 sudo systemctl daemon-reload
@@ -246,8 +285,17 @@ echo "  sudo systemctl stop $SERVICE_NAME"
 echo "  sudo systemctl restart $SERVICE_NAME"
 echo ""
 echo "로그 확인:"
+echo "  # Journald 로그"
 echo "  sudo journalctl -u $SERVICE_NAME -f"
 echo "  sudo journalctl -u $SERVICE_NAME -n 100"
+echo "  $SERVICE_HOME/scripts/view-logs.sh -f    # 실시간 로그"
+echo "  $SERVICE_HOME/scripts/view-logs.sh -n 100 # 최근 100줄"
+echo "  $SERVICE_HOME/scripts/view-logs.sh -e     # 에러만"
+echo ""
+echo "  # 파일 로그 (Logstash 전송용)"
+echo "  tail -f $LOG_DIR/app.log"
+echo "  tail -f $LOG_DIR/error.log"
+echo "  cat $LOG_DIR/app.log"
 echo ""
 echo "환경 변수 설정:"
 echo "  sudo nano $SERVICE_HOME/.env"

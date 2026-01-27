@@ -8,6 +8,7 @@ Main application entry point that configures:
 - Logging system
 - Exception handlers
 """
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -24,8 +25,12 @@ from app.services.nhn_logger import (
     log_error,
     log_exception,
 )
+from app.utils.logger import setup_logging
 
 settings = get_settings()
+
+# Python logging 설정 (파일 및 journald용)
+setup_logging()
 
 
 @asynccontextmanager

@@ -1,9 +1,9 @@
 name: Deploy to NHN Cloud
 
 on:
-  push:
-    tags:
-      - 'v*'
+  pull_request:
+    types:
+      - closed
     branches:
       - dev
       - release
@@ -12,21 +12,25 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # PR merge 시에만 실행
+    if: github.event.pull_request.merged == true
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 태그 정보를 위해 전체 히스토리 필요
+          # PR merge의 경우 merge commit 체크아웃
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
 
       - name: Determine deployment context
         id: context
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-            BINARY_GROUP="dev"
-            ENVIRONMENT="DEV"
-          elif [[ "${{ github.ref }}" == refs/heads/release ]]; then
+          # PR merge인 경우만 처리
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          
+          if [[ "$BASE_BRANCH" == "release" ]]; then
+            # release 브랜치로 merge → PRODUCTION
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null || git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
             if [ -z "$VERSION" ]; then
               echo "::error::Version not found. Ensure a version tag exists or is mentioned in commit message."
@@ -35,6 +39,7 @@ jobs:
             BINARY_GROUP="release"
             ENVIRONMENT="PRODUCTION"
           else
+            # dev 브랜치로 merge → DEV (기본값)
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
             BINARY_GROUP="dev"
             ENVIRONMENT="DEV"
@@ -74,49 +79,11 @@ jobs:
             --exclude='.idea' \
             ./ deploy-package/
           
-          # 환경별 .env 템플릿 생성
-          DEBUG_VALUE=$([ "${{ steps.context.outputs.environment }}" == "PRODUCTION" ] && echo "False" || echo "True")
+          # 환경별 .env 템플릿 생성 (템플릿 파일에서 변수 치환)
+          ENV_VALUE="${{ steps.context.outputs.environment }}"
+          DEBUG_VALUE=$([ "$ENV_VALUE" == "PRODUCTION" ] && echo "False" || echo "True")
           
-          cat > deploy-package/.env.template << EOF
-# Environment
-ENVIRONMENT=${{ steps.context.outputs.environment }}
-
-# Application
-APP_NAME=Photo API
-APP_VERSION=1.0.0
-DEBUG=${DEBUG_VALUE}
-SECRET_KEY=change-me-in-production
-
-# Database
-DATABASE_URL=sqlite+aiosqlite:///./photo_api.db
-
-# JWT
-JWT_SECRET_KEY=jwt-secret-change-in-production
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-
-# NHN Cloud Object Storage
-NHN_STORAGE_IAM_USER=
-NHN_STORAGE_IAM_PASSWORD=
-NHN_STORAGE_PROJECT_ID=
-NHN_STORAGE_TENANT_ID=
-NHN_STORAGE_AUTH_URL=https://api-identity-infrastructure.nhncloudservice.com/v2.0
-NHN_STORAGE_URL=https://api-storage.nhncloudservice.com/v1
-NHN_STORAGE_CONTAINER=photo-container
-
-# NHN Cloud CDN
-NHN_CDN_DOMAIN=
-NHN_CDN_APP_KEY=
-NHN_CDN_SECRET_KEY=
-NHN_CDN_ENCRYPT_KEY=
-NHN_CDN_TOKEN_EXPIRE_SECONDS=3600
-
-# NHN Cloud Log & Crash
-NHN_LOG_APPKEY=
-NHN_LOG_URL=https://api-logncrash.nhncloudservice.com/v2/log
-NHN_LOG_VERSION=v2
-NHN_LOG_PLATFORM=API
-EOF
+          sed -e "s/{{ENVIRONMENT}}/${ENV_VALUE}/g" -e "s/{{DEBUG}}/${DEBUG_VALUE}/g" env.template > deploy-package/.env.template
           
           # 압축 파일 생성
           cd deploy-package
