@@ -12,6 +12,7 @@ import httpx
 
 from app.config import get_settings
 from app.services.nhn_logger import log_info, log_error, log_exception
+from app.utils.prometheus_metrics import record_external_request
 
 
 class NHNObjectStorageService:
@@ -93,21 +94,14 @@ class NHNObjectStorageService:
                 }
             }
             
-            # 디버깅: 요청 정보 로그
-            log_info(
-                "IAM authentication request",
-                auth_url=auth_url,
-                tenant_id=tenant_id,
-                username=iam_user,
-            )
-            
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(
-                        auth_url,
-                        json=auth_data,
-                        headers={"Content-Type": "application/json"},
-                    )
+                async with record_external_request("nhn_storage"):
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            auth_url,
+                            json=auth_data,
+                            headers={"Content-Type": "application/json"},
+                        )
                     
                     # 응답 상태 코드 확인
                     status_code = response.status_code
@@ -117,62 +111,36 @@ class NHNObjectStorageService:
                         data = response.json()
                     except Exception as json_err:
                         log_error(
-                            "Failed to parse IAM response as JSON",
+                            "IAM response parse failed",
+                            event="storage_auth",
                             status_code=status_code,
-                            response_text=response.text[:500] if hasattr(response, 'text') else str(response),
                             error=str(json_err),
                         )
                         raise Exception("IAM 인증 응답을 파싱할 수 없습니다.")
                     
-                    # 로그 기록
-                    log_info(
-                        "IAM authentication response",
-                        status_code=status_code,
-                        url=auth_url,
-                        tenant_id=tenant_id,
-                        username=iam_user,
-                    )
-                    
-                    # 상태 코드가 200이 아니면 에러 처리
+                    # 상태 코드가 200이 아니면 에러 처리 (한 줄 로그만)
                     if status_code != 200:
-                        # 상태 코드가 200이 아닌 경우 상세 로그
-                        log_error(
-                            "IAM authentication failed - non-200 status",
-                            status_code=status_code,
-                            response_data=data,
-                            url=auth_url,
-                        )
-                        # 응답 본문 확인 (디버깅용)
                         error_message = "IAM 인증에 실패했습니다."
                         try:
                             error_detail = data.get("error", {})
                             if isinstance(error_detail, dict):
                                 error_msg = error_detail.get("message", "")
                                 if "Could not find" in error_msg or "tenant" in error_msg.lower():
-                                    error_message = f"IAM 인증 실패: Tenant ID '{tenant_id}'를 찾을 수 없습니다. NHN Cloud 콘솔에서 Tenant ID를 확인하고, IAM 사용자가 해당 프로젝트의 멤버인지 확인하세요."
+                                    error_message = f"IAM 인증 실패: Tenant ID '{tenant_id}'를 찾을 수 없습니다."
                                 elif "Unauthorized" in error_msg or status_code == 401:
-                                    # 이메일을 사용자명으로 사용한 경우 안내
-                                    if "@" in iam_user:
-                                        error_message = f"IAM 인증 실패: 이메일 주소를 사용자명으로 사용할 수 없습니다. NHN Cloud 콘솔 > Object Storage > API 엔드포인트 설정에서 'API 사용자명'을 확인하세요. (이메일이 아닌 실제 IAM 사용자명 또는 API 사용자명을 사용해야 합니다.)"
-                                    else:
-                                        error_message = f"IAM 인증 실패: 인증 정보가 올바르지 않거나 권한이 없습니다. Object Storage → API 엔드포인트 설정에서 API 사용자명, API 비밀번호, Tenant ID를 정확히 확인하세요."
-                            
-                            # 상세 로그 출력
+                                    error_message = "IAM 인증 실패: 인증 정보가 올바르지 않거나 권한이 없습니다."
                             log_error(
                                 "IAM authentication failed",
+                                event="storage_auth",
                                 status_code=status_code,
-                                error_data=data,
                                 tenant_id=tenant_id,
-                                username=iam_user,
-                                auth_url=auth_url,
                             )
-                        except Exception as log_err:
+                        except Exception:
                             log_error(
                                 "IAM authentication failed",
+                                event="storage_auth",
                                 status_code=status_code,
                                 tenant_id=tenant_id,
-                                username=iam_user,
-                                log_error=str(log_err),
                             )
                         raise Exception(error_message)
                     
@@ -184,7 +152,7 @@ class NHNObjectStorageService:
                     # 토큰 ID 추출
                     self._token = token_data.get("id")
                     if not self._token:
-                        log_error("Token not found in IAM response")
+                        log_error("IAM token not found", event="storage_auth")
                         raise Exception("IAM 토큰을 받을 수 없습니다.")
                     
                     # 토큰 만료 시간 추출
@@ -208,34 +176,23 @@ class NHNObjectStorageService:
                         tenant_id_from_response = tenant_id
                     
                     if not tenant_id_from_response:
-                        log_error("Tenant ID not found in IAM response or settings")
+                        log_error("IAM tenant ID not found", event="storage_auth")
                         raise Exception("Tenant ID를 찾을 수 없습니다. NHN_STORAGE_TENANT_ID를 설정하세요.")
                     
                     self._account = f"AUTH_{tenant_id_from_response}"
-                    
-                    # 스토리지 URL 설정 (.env에서 설정된 URL 그대로 사용)
                     self._storage_url = self.settings.nhn_storage_url
-                    
-                    log_info(
-                        "Storage authentication successful",
-                        account=self._account,
-                    )
-                    
+                    log_info("Storage auth OK", event="storage_auth", account=self._account)
                     return self._token
                     
             except httpx.HTTPStatusError as e:
-                # HTTP 상태 코드 오류 (4xx, 5xx)
-                log_exception("HTTP status error during storage authentication", e)
+                log_exception("Storage auth HTTP error", e, event="storage_auth")
                 raise Exception("IAM 인증에 실패했습니다.")
             except httpx.HTTPError as e:
-                # 네트워크 오류, 타임아웃 등
-                log_exception("HTTP error during storage authentication", e)
+                log_exception("Storage auth HTTP error", e, event="storage_auth")
                 raise Exception("IAM 인증 중 네트워크 오류가 발생했습니다.")
             except Exception as e:
-                # 다른 예외 (JSON 파싱 오류 등) 처리
                 error_msg = str(e)
-                log_exception("Error during storage authentication", e)
-                # 이미 처리된 예외는 그대로 전달
+                log_exception("Storage auth failed", e, event="storage_auth")
                 if "IAM 인증" in error_msg or "Storage authentication failed" in error_msg or "네트워크 오류" in error_msg:
                     raise
                 raise Exception(f"Storage authentication failed: {error_msg}")
@@ -267,42 +224,36 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container_name}"
         
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # HEAD 요청으로 컨테이너 존재 확인
-                response = await client.head(
-                    url,
-                    headers={"X-Auth-Token": token},
-                )
-                
-                # 204 No Content 또는 404 Not Found
-                if response.status_code == 404:
-                    # 컨테이너가 없으면 생성 (PUT 요청)
-                    create_response = await client.put(
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # HEAD 요청으로 컨테이너 존재 확인
+                    response = await client.head(
                         url,
                         headers={"X-Auth-Token": token},
                     )
-                    
-                    if create_response.status_code in (201, 202):
-                        log_info("Container created", container=container_name)
-                    else:
-                        log_error(
-                            "Failed to create container",
-                            container=container_name,
-                            status_code=create_response.status_code,
+
+                    if response.status_code == 404:
+                        create_response = await client.put(
+                            url,
+                            headers={"X-Auth-Token": token},
                         )
-                elif response.status_code in (200, 204):
-                    # 컨테이너가 이미 존재함
-                    pass
-                else:
-                    log_error(
-                        "Unexpected status when checking container",
-                        container=container_name,
-                        status_code=response.status_code,
-                    )
-                    
+                        if create_response.status_code not in (201, 202):
+                            log_error(
+                                "Container create failed",
+                                event="storage",
+                                container=container_name,
+                                status_code=create_response.status_code,
+                            )
+                    elif response.status_code not in (200, 204):
+                        log_error(
+                            "Container check failed",
+                            event="storage",
+                            container=container_name,
+                            status_code=response.status_code,
+                        )
+
         except Exception as e:
-            log_exception("Error ensuring container exists", e, container=container_name)
-            # 컨테이너 생성 실패해도 업로드는 시도 (이미 존재할 수 있음)
+            log_exception("Container ensure failed", e, event="storage", container=container_name)
     
     async def upload_file(
         self,
@@ -335,43 +286,38 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # PUT 메서드로 오브젝트 업로드
-                response = await client.put(
-                    url,
-                    content=file_content,
-                    headers={
-                        "X-Auth-Token": token,
-                        "Content-Type": content_type,
-                    },
-                )
-                
-                # API 문서: 성공 시 201 Created 반환
-                if response.status_code not in (200, 201):
-                    log_error(
-                        "File upload failed",
-                        status_code=response.status_code,
-                        object_name=object_name,
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # PUT 메서드로 오브젝트 업로드
+                    response = await client.put(
+                        url,
+                        content=file_content,
+                        headers={
+                            "X-Auth-Token": token,
+                            "Content-Type": content_type,
+                        },
                     )
-                    raise Exception("File upload failed")
-                
-                log_info(
-                    "File uploaded successfully",
-                    object_name=object_name,
-                    size=len(file_content),
-                )
-                
-                # 반환 형식: container/object_name
-                return f"{container}/{object_name}"
-                
+
+                    if response.status_code not in (200, 201):
+                        log_error(
+                            "File upload failed",
+                            event="storage",
+                            status_code=response.status_code,
+                            object_name=object_name,
+                        )
+                        raise Exception("File upload failed")
+
+                    # 반환 형식: container/object_name
+                    return f"{container}/{object_name}"
+
         except httpx.TimeoutException:
-            log_error("File upload timeout", object_name=object_name)
+            log_error("File upload timeout", event="storage", object_name=object_name)
             raise Exception("File upload timeout")
         except httpx.HTTPError as e:
-            log_exception("HTTP error during file upload", e, object_name=object_name)
+            log_exception("File upload HTTP error", e, event="storage", object_name=object_name)
             raise Exception("File upload failed")
         except Exception as e:
-            log_exception("Error during file upload", e, object_name=object_name)
+            log_exception("File upload failed", e, event="storage", object_name=object_name)
             raise Exception("File upload failed")
     
     async def download_file(self, object_name: str) -> bytes:
@@ -398,49 +344,35 @@ class NHNObjectStorageService:
             # 이미 컨테이너가 포함된 경우
             url = f"{storage_url}/{object_name}"
         else:
-            # 컨테이너가 없는 경우 추가
             url = f"{storage_url}/{container}/{object_name}"
         
-        log_info(
-            "Downloading file from Object Storage",
-            url=url,
-            object_name=object_name,
-        )
-        
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # GET 메서드로 오브젝트 다운로드
-                response = await client.get(
-                    url,
-                    headers={"X-Auth-Token": token},
-                )
-                
-                if response.status_code != 200:
-                    error_msg = response.text[:500] if response.text else "No error message"
-                    log_error(
-                        "File download failed",
-                        status_code=response.status_code,
-                        object_name=object_name,
-                        url=url,
-                        error=error_msg,
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # GET 메서드로 오브젝트 다운로드
+                    response = await client.get(
+                        url,
+                        headers={"X-Auth-Token": token},
                     )
-                    raise Exception(f"File download failed: HTTP {response.status_code}")
-                
-                log_info(
-                    "File downloaded successfully",
-                    object_name=object_name,
-                    size=len(response.content),
-                )
-                return response.content
-                
+
+                    if response.status_code != 200:
+                        log_error(
+                            "File download failed",
+                            event="storage",
+                            status_code=response.status_code,
+                            object_name=object_name,
+                        )
+                        raise Exception(f"File download failed: HTTP {response.status_code}")
+                    return response.content
+
         except httpx.TimeoutException:
-            log_error("File download timeout", object_name=object_name, url=url)
+            log_error("File download timeout", event="storage", object_name=object_name)
             raise Exception("File download timeout")
         except httpx.HTTPError as e:
-            log_exception("HTTP error during file download", e, object_name=object_name, url=url)
+            log_exception("File download HTTP error", e, event="storage", object_name=object_name)
             raise Exception(f"File download failed: {str(e)}")
         except Exception as e:
-            log_exception("Error during file download", e, object_name=object_name, url=url)
+            log_exception("File download failed", e, event="storage", object_name=object_name)
             raise
     
     async def delete_file(self, object_name: str) -> bool:
@@ -467,36 +399,32 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # DELETE 메서드로 오브젝트 삭제
-                response = await client.delete(
-                    url,
-                    headers={"X-Auth-Token": token},
-                )
-                
-                # API 문서: 성공 시 204 No Content 반환
-                # 404 Not Found도 성공으로 간주 (이미 삭제됨)
-                success = response.status_code in (204, 404)
-                
-                if success:
-                    log_info("File deleted successfully", object_name=object_name)
-                else:
-                    log_error(
-                        "File deletion failed",
-                        status_code=response.status_code,
-                        object_name=object_name,
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    # DELETE 메서드로 오브젝트 삭제
+                    response = await client.delete(
+                        url,
+                        headers={"X-Auth-Token": token},
                     )
-                
-                return success
-                
+
+                    success = response.status_code in (204, 404)
+                    if not success:
+                        log_error(
+                            "File deletion failed",
+                            event="storage",
+                            status_code=response.status_code,
+                            object_name=object_name,
+                        )
+                    return success
+
         except httpx.TimeoutException:
-            log_error("File deletion timeout", object_name=object_name)
+            log_error("File deletion timeout", event="storage", object_name=object_name)
             return False
         except httpx.HTTPError as e:
-            log_exception("HTTP error during file deletion", e, object_name=object_name)
+            log_exception("File deletion failed", e, event="storage", object_name=object_name)
             return False
         except Exception as e:
-            log_exception("Error during file deletion", e, object_name=object_name)
+            log_exception("File deletion failed", e, event="storage", object_name=object_name)
             return False
     
     async def file_exists(self, object_name: str) -> bool:
@@ -523,17 +451,19 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # HEAD 메서드로 오브젝트 정보 조회
-                response = await client.head(
-                    url,
-                    headers={"X-Auth-Token": token},
-                )
-                
-                # 200 OK면 존재함
-                return response.status_code == 200
-                
-        except Exception:
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # HEAD 메서드로 오브젝트 정보 조회
+                    response = await client.head(
+                        url,
+                        headers={"X-Auth-Token": token},
+                    )
+
+                    # 200 OK면 존재함
+                    return response.status_code == 200
+
+        except Exception as e:
+            log_exception("File exists check failed", e, event="storage", object_name=object_name)
             return False
 
 

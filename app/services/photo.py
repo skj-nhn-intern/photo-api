@@ -56,25 +56,15 @@ class PhotoService:
         storage_path = f"image/{album_id}/{unique_filename}"
         
         try:
-            # Upload to Object Storage
             await self.storage.upload_file(
                 file_content=file_content,
                 object_name=storage_path,
                 content_type=content_type,
             )
-            
-            log_info(
-                "Photo uploaded to storage",
-                user_id=user.id,
-                storage_path=storage_path,
-            )
-            
         except Exception as e:
-            log_exception("Failed to upload photo to storage", e, user_id=user.id)
-            # 내부 에러 정보 노출 방지
+            log_exception("Photo upload failed", e, event="photo", user_id=user.id, storage_path=storage_path)
             raise ValueError("사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.")
         
-        # Create photo record in database
         photo = Photo(
             owner_id=user.id,
             filename=unique_filename,
@@ -89,13 +79,7 @@ class PhotoService:
         self.db.add(photo)
         await self.db.flush()
         await self.db.refresh(photo)
-        
-        log_info(
-            "Photo metadata saved",
-            photo_id=photo.id,
-            user_id=user.id,
-        )
-        
+        log_info("Photo uploaded", event="photo", photo_id=photo.id, user_id=user.id)
         return photo
     
     async def get_photo_by_id(
@@ -169,9 +153,6 @@ class PhotoService:
         
         await self.db.flush()
         await self.db.refresh(photo)
-        
-        log_info("Photo updated", photo_id=photo.id)
-        
         return photo
     
     async def delete_photo(self, photo: Photo) -> bool:
@@ -184,28 +165,13 @@ class PhotoService:
         Returns:
             True if deletion was successful
         """
-        # Delete from Object Storage
         try:
             await self.storage.delete_file(photo.storage_path)
-            log_info(
-                "Photo deleted from storage",
-                photo_id=photo.id,
-                storage_path=photo.storage_path,
-            )
         except Exception as e:
-            log_exception(
-                "Failed to delete photo from storage",
-                e,
-                photo_id=photo.id,
-            )
-            # Continue with database deletion even if storage deletion fails
-        
-        # Delete from database
+            log_exception("Photo storage delete failed", e, event="photo", photo_id=photo.id, storage_path=photo.storage_path)
         await self.db.delete(photo)
         await self.db.flush()
-        
-        log_info("Photo deleted from database", photo_id=photo.id)
-        
+        log_info("Photo deleted", event="photo", photo_id=photo.id)
         return True
     
     async def download_photo(self, photo: Photo) -> bytes:
@@ -219,21 +185,9 @@ class PhotoService:
             File content as bytes
         """
         try:
-            file_content = await self.storage.download_file(photo.storage_path)
-            log_info(
-                "Photo downloaded",
-                photo_id=photo.id,
-                storage_path=photo.storage_path,
-                size=len(file_content),
-            )
-            return file_content
+            return await self.storage.download_file(photo.storage_path)
         except Exception as e:
-            log_exception(
-                "Failed to download photo",
-                e,
-                photo_id=photo.id,
-                storage_path=photo.storage_path,
-            )
+            log_exception("Photo download failed", e, event="photo", photo_id=photo.id, storage_path=photo.storage_path)
             raise ValueError("사진 다운로드에 실패했습니다.")
     
     async def get_photo_with_url(self, photo: Photo) -> PhotoWithUrl:

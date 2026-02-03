@@ -2,19 +2,51 @@
 Application configuration using Pydantic Settings.
 Manages all environment variables and settings.
 """
+from enum import Enum
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, model_validator
+
+
+class Environment(str, Enum):
+    """Application environment modes."""
+    DEV = "DEV"
+    PRODUCTION = "PRODUCTION"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+    
+    # Environment
+    environment: Environment = Field(
+        default=Environment.DEV,
+        description="Application environment: DEV or PRODUCTION"
+    )
     
     # Application
     app_name: str = Field(default="Photo API")
     app_version: str = Field(default="1.0.0")
     debug: bool = Field(default=False)
     secret_key: str = Field(default="change-me-in-production")
+    
+    @model_validator(mode='after')
+    def set_debug_from_environment(self):
+        """Set debug mode based on environment if not explicitly set via environment variable."""
+        # DEBUG 환경 변수가 명시적으로 설정되지 않은 경우에만 환경 모드에 따라 설정
+        import os
+        if 'DEBUG' not in os.environ:
+            self.debug = self.environment == Environment.DEV
+        return self
+    
+    @property
+    def is_dev(self) -> bool:
+        """Check if running in development mode."""
+        return self.environment == Environment.DEV
+    
+    @property
+    def is_production(self) -> bool:
+        """Check if running in production mode."""
+        return self.environment == Environment.PRODUCTION
     
     # Database
     database_url: str = Field(default="sqlite+aiosqlite:///./photo_api.db")
@@ -57,6 +89,13 @@ class Settings(BaseSettings):
     )
     nhn_log_version: str = Field(default="v2")
     nhn_log_platform: str = Field(default="API")
+    
+    # Prometheus (Observability). Loki 로그는 Promtail이 /var/log/photo-api 파일을 읽어 전송
+    node_name: str = Field(default="", description="Node/Pod identifier for Prometheus labels")
+    
+    # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음. .env에 남아 있어도 오류 없이 무시
+    loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
+    loki_logs_labels: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
     
     class Config:
         env_file = ".env"

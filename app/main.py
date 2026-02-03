@@ -8,6 +8,8 @@ Main application entry point that configures:
 - Logging system
 - Exception handlers
 """
+import logging
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -18,45 +20,36 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.routers import auth_router, photos_router, albums_router, share_router
+from app.utils.prometheus_metrics import exceptions_total, ready, setup_prometheus
 from app.services.nhn_logger import (
     get_logger_service,
     log_info,
     log_error,
     log_exception,
 )
+from app.utils.logger import setup_logging
 
 settings = get_settings()
+
+# Python logging 설정 (파일 및 journald용)
+setup_logging()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    """
-    Application lifespan manager.
-    Handles startup and shutdown events.
-    """
-    # Startup
-    log_info("Application starting up", version=settings.app_version)
-    
-    # Initialize database
+    """Application lifespan: startup / shutdown 한 번씩만 로그."""
+    ready.set(1)
+    log_info("Startup", event="lifecycle", version=settings.app_version)
     await init_db()
-    log_info("Database initialized")
-    
-    # Start logger background task
     logger_service = get_logger_service()
     await logger_service.start()
-    log_info("Logger service started")
-    
+
     yield
-    
-    # Shutdown
-    log_info("Application shutting down")
-    
-    # Stop logger and flush remaining logs
+
+    ready.set(0)
+    log_info("Shutdown", event="lifecycle")
     await logger_service.stop()
-    
-    # Close database connections
     await close_db()
-    log_info("Database connections closed")
 
 
 # Create FastAPI application
@@ -92,6 +85,9 @@ Use the `/auth/login` endpoint to get a token.
     lifespan=lifespan,
 )
 
+# Prometheus: FastAPI metrics + node info at /metrics
+setup_prometheus(app)
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -109,10 +105,12 @@ async def global_exception_handler(request: Request, exc: Exception):
     Global exception handler for unhandled exceptions.
     Logs the error and returns a generic error response.
     """
+    exceptions_total.inc()
     log_exception(
         "Unhandled exception",
         exc,
-        path=str(request.url),
+        event="exception",
+        path=request.url.path,
         method=request.method,
     )
     
@@ -122,32 +120,22 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Request logging middleware
+# 요청당 한 줄 로그 (method, path, status_code, duration_ms). /health 제외.
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """
-    Middleware to log all requests.
-    """
-    # Skip logging for certain endpoints
-    if request.url.path in ["/docs", "/openapi.json", "/redoc"]:
+    if request.url.path in ["/docs", "/openapi.json", "/redoc", "/health"]:
         return await call_next(request)
-    
-    log_info(
-        "Request received",
-        method=request.method,
-        path=str(request.url.path),
-        client=request.client.host if request.client else "unknown",
-    )
-    
+    start = time.perf_counter()
     response = await call_next(request)
-    
+    duration_ms = round((time.perf_counter() - start) * 1000)
     log_info(
-        "Request completed",
+        "Request",
+        event="request",
         method=request.method,
-        path=str(request.url.path),
+        path=request.url.path,
         status_code=response.status_code,
+        duration_ms=duration_ms,
     )
-    
     return response
 
 
@@ -173,3 +161,17 @@ async def root():
         "version": settings.app_version,
         "docs": "/docs",
     }
+
+
+# Health check endpoint
+@app.get(
+    "/health",
+    tags=["Health"],
+    summary="Health check",
+)
+async def health_check():
+    """
+    Health check endpoint for load balancer.
+    Returns 200 OK if the service is running.
+    """
+    return {"status": "healthy"}

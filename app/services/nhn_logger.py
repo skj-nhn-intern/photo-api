@@ -2,10 +2,11 @@
 NHN Cloud Log & Crash service integration.
 Provides async logging that doesn't block the main application.
 Uses a background queue to batch log messages for efficiency.
+동시에 Python 표준 로거로도 전달해 파일/스토드아웃(Promtail→Loki)에 동일 이벤트 기록.
 """
 import asyncio
 import json
-import time
+import logging
 import traceback
 from datetime import datetime
 from enum import Enum
@@ -17,6 +18,10 @@ import socket
 import httpx
 
 from app.config import get_settings
+from app.utils.prometheus_metrics import (
+    external_request_errors_total,
+    record_external_request,
+)
 
 
 class LogLevel(str, Enum):
@@ -53,6 +58,10 @@ class NHNLoggerService:
         self._hostname = socket.gethostname()
         self._platform = platform.system()
     
+    def queue_size(self) -> int:
+        """Current log queue length (for Prometheus / backpressure monitoring)."""
+        return len(self._queue)
+
     async def start(self) -> None:
         """Start the background log processing task."""
         if self._running:
@@ -108,18 +117,23 @@ class NHNLoggerService:
         **extra: Any,
     ) -> None:
         """
-        Add a log message to the queue.
-        This is non-blocking and returns immediately.
-        
-        Args:
-            level: Log level (DEBUG, INFO, WARN, ERROR, FATAL)
-            message: Log message
-            **extra: Additional fields to include in the log
+        Add a log message to the queue and to Python logger (file/stdout).
+        Non-blocking; one event for NHN Cloud and local logs.
         """
         log_body = self._create_log_body(level, message, **extra)
-        
-        # Add to queue (will automatically drop oldest if full)
         self._queue.append(log_body)
+
+        # 동일 이벤트를 파일/스토드아웃에도 기록 (Promtail→Loki, 장애 대응용)
+        _LEVEL_MAP = {
+            LogLevel.DEBUG: logging.DEBUG,
+            LogLevel.INFO: logging.INFO,
+            LogLevel.WARN: logging.WARNING,
+            LogLevel.ERROR: logging.ERROR,
+            LogLevel.FATAL: logging.CRITICAL,
+        }
+        py_level = _LEVEL_MAP.get(level, logging.INFO)
+        std_logger = logging.getLogger("app")
+        std_logger.log(py_level, message, extra=extra)
     
     def debug(self, message: str, **extra: Any) -> None:
         """Log a debug message."""
@@ -142,7 +156,7 @@ class NHNLoggerService:
         self.log(LogLevel.FATAL, message, **extra)
     
     def exception(self, message: str, exc: Exception, **extra: Any) -> None:
-        """Log an exception with traceback."""
+        """Log an exception with traceback (NHN + Python logger)."""
         tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
         extra["exception_type"] = type(exc).__name__
         extra["exception_message"] = str(exc)
@@ -152,44 +166,55 @@ class NHNLoggerService:
     async def _send_logs(self, logs: list[dict]) -> bool:
         """
         Send a batch of logs to NHN Cloud.
-        
+
         Args:
             logs: List of log message bodies
-            
+
         Returns:
             True if send was successful
         """
         if not logs or not self.settings.nhn_log_appkey:
             return True
-        
+
         url = self.settings.nhn_log_url
-        
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    # Send each log individually (API requirement)
-                    for log in logs:
-                        response = await client.post(
-                            url,
-                            json=log,
-                            headers={
-                                "Content-Type": "application/json",
-                            },
-                        )
-                        # Log API returns 200 on success
-                        if response.status_code != 200:
-                            continue
-                    
-                    return True
-                    
-            except Exception as e:
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(1 * (attempt + 1))
-                    continue
-                # Final attempt failed, logs will be lost
-                return False
-        
-        return False
+
+        async with record_external_request("nhn_log"):
+            for attempt in range(self.MAX_RETRIES):
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        # Send each log individually (API requirement)
+                        for log in logs:
+                            response = await client.post(
+                                url,
+                                json=log,
+                                headers={
+                                    "Content-Type": "application/json",
+                                },
+                            )
+                            # Log API returns 200 on success
+                            if response.status_code != 200:
+                                continue
+
+                        return True
+
+                except Exception as e:
+                    if attempt < self.MAX_RETRIES - 1:
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+                    # Final attempt failed, logs will be lost — 서버에 기록 (NHN 로거 사용 금지, 재귀 방지)
+                    external_request_errors_total.labels(service="nhn_log").inc()
+                    logging.getLogger("app").error(
+                        "NHN Log send failed after retries",
+                        extra={"event": "nhn_log", "error": str(e), "batch_size": len(logs)},
+                    )
+                    return False
+
+            external_request_errors_total.labels(service="nhn_log").inc()
+            logging.getLogger("app").error(
+                "NHN Log send failed (non-200)",
+                extra={"event": "nhn_log", "batch_size": len(logs)},
+            )
+            return False
     
     async def _process_queue(self) -> None:
         """Background task that processes the log queue."""

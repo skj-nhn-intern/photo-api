@@ -58,13 +58,6 @@ class AlbumService:
         self.db.add(album)
         await self.db.flush()
         await self.db.refresh(album)
-        
-        log_info(
-            "Album created",
-            album_id=album.id,
-            user_id=user.id,
-        )
-        
         return album
     
     async def get_album_by_id(
@@ -153,9 +146,6 @@ class AlbumService:
         
         await self.db.flush()
         await self.db.refresh(album)
-        
-        log_info("Album updated", album_id=album.id)
-        
         return album
     
     async def delete_album(self, album: Album) -> bool:
@@ -168,12 +158,8 @@ class AlbumService:
         Returns:
             True if deletion was successful
         """
-        album_id = album.id
         await self.db.delete(album)
         await self.db.flush()
-        
-        log_info("Album deleted", album_id=album_id)
-        
         return True
     
     # ============== Album Photos ==============
@@ -228,13 +214,6 @@ class AlbumService:
                 added += 1
         
         await self.db.flush()
-        
-        log_info(
-            "Photos added to album",
-            album_id=album.id,
-            photos_added=added,
-        )
-        
         return added
     
     async def remove_photos_from_album(
@@ -263,13 +242,6 @@ class AlbumService:
             await self.db.delete(ap)
         
         await self.db.flush()
-        
-        log_info(
-            "Photos removed from album",
-            album_id=album.id,
-            photos_removed=len(album_photos),
-        )
-        
         return len(album_photos)
     
     async def get_album_photos(self, album_id: int) -> List[Photo]:
@@ -360,13 +332,7 @@ class AlbumService:
         self.db.add(share_link)
         await self.db.flush()
         await self.db.refresh(share_link)
-        
-        log_info(
-            "Share link created",
-            share_id=share_link.id,
-            album_id=album.id,
-        )
-        
+        log_info("Share link created", event="share", share_id=share_link.id, album_id=album.id)
         return share_link
     
     async def get_share_link_by_token(
@@ -425,12 +391,6 @@ class AlbumService:
         share_link.is_active = False
         await self.db.flush()
         await self.db.refresh(share_link)
-        
-        log_info(
-            "Share link deactivated",
-            share_id=share_link.id,
-        )
-        
         return share_link
     
     async def delete_share_link(
@@ -446,12 +406,8 @@ class AlbumService:
         Returns:
             True if deletion was successful
         """
-        share_id = share_link.id
         await self.db.delete(share_link)
         await self.db.flush()
-        
-        log_info("Share link deleted", share_id=share_id)
-        
         return True
     
     async def increment_view_count(
@@ -475,12 +431,8 @@ class AlbumService:
         Returns:
             SharedAlbumResponse if valid, None otherwise
         """
-        # Check if link is valid
         if not share_link.is_valid:
-            log_error(
-                "Shared link access denied: invalid or expired",
-                share_id=share_link.id,
-            )
+            log_error("Share access denied", event="share", share_id=share_link.id)
             return None
         
         # Get album
@@ -492,15 +444,7 @@ class AlbumService:
         photos = await self.get_album_photos(album.id)
         photos_with_urls = await self.photo_service.get_photos_with_urls(photos)
         
-        # Increment view count
         await self.increment_view_count(share_link)
-        
-        log_info(
-            "Shared album accessed",
-            share_id=share_link.id,
-            album_id=album.id,
-        )
-        
         return SharedAlbumResponse(
             album_name=album.name,
             album_description=album.description,

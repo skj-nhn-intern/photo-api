@@ -11,6 +11,11 @@ from typing import Optional, List
 import httpx
 
 from app.config import get_settings
+from app.services.nhn_logger import log_error, log_exception
+from app.utils.prometheus_metrics import (
+    external_request_errors_total,
+    record_external_request,
+)
 
 
 class NHNCDNService:
@@ -47,7 +52,7 @@ class NHNCDNService:
             생성된 토큰 문자열, 실패시 None
         """
         if not self.settings.nhn_cdn_app_key:
-            print("[CDN] App Key가 설정되지 않았습니다.")
+            log_error("CDN Auth Token skipped", event="cdn", reason="app_key_not_set")
             return None
         
         if duration_seconds is None:
@@ -77,21 +82,27 @@ class NHNCDNService:
             headers["Authorization"] = self.settings.nhn_cdn_secret_key
         
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers)
-                
-                data = response.json()
-                print(f"[CDN] API Response: {data}")
-                
-                if data.get("header", {}).get("isSuccessful"):
-                    token = data.get("authToken", {}).get("singlePathToken")
-                    return token
-                else:
-                    print(f"[CDN] Auth Token 생성 실패: {data}")
-                    return None
-                    
+            async with record_external_request("nhn_cdn"):
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, headers=headers)
+
+                    data = response.json()
+                    if data.get("header", {}).get("isSuccessful"):
+                        token = data.get("authToken", {}).get("singlePathToken")
+                        return token
+                    else:
+                        log_error(
+                            "CDN Auth Token creation failed",
+                            event="cdn",
+                            status_code=response.status_code,
+                            path=path,
+                        )
+                        external_request_errors_total.labels(service="nhn_cdn").inc()
+                        return None
+
         except httpx.HTTPError as e:
-            print(f"[CDN] Auth Token API 호출 실패: {e}")
+            log_exception("CDN Auth Token API call failed", e, event="cdn", path=path)
+            external_request_errors_total.labels(service="nhn_cdn").inc()
             return None
     
     async def generate_auth_token_url(
