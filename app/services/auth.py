@@ -37,19 +37,11 @@ class AuthService:
         # Check if email exists
         existing_email = await self._get_user_by_email(user_data.email)
         if existing_email:
-            log_error(
-                "Registration failed: email already exists",
-                email=user_data.email,
-            )
+            log_error("Registration failed", event="auth", email=user_data.email, reason="email_exists")
             raise ValueError("Email already registered")
-        
-        # Check if username exists
         existing_username = await self._get_user_by_username(user_data.username)
         if existing_username:
-            log_error(
-                "Registration failed: username already exists",
-                username=user_data.username,
-            )
+            log_error("Registration failed", event="auth", username=user_data.username, reason="username_exists")
             raise ValueError("Username already taken")
         
         # Create new user
@@ -63,13 +55,7 @@ class AuthService:
         self.db.add(user)
         await self.db.flush()
         await self.db.refresh(user)
-        
-        log_info(
-            "User registered successfully",
-            user_id=user.id,
-            email=user.email,
-        )
-        
+        log_info("Registration", event="auth", user_id=user.id, email=user.email)
         return user
     
     async def authenticate(self, email: str, password: str) -> Optional[User]:
@@ -86,18 +72,15 @@ class AuthService:
         user = await self._get_user_by_email(email)
         
         if not user:
-            log_error("Login failed: user not found", email=email)
+            log_error("Login failed", event="auth", email=email, reason="user_not_found")
             return None
-        
         if not user.is_active:
-            log_error("Login failed: user inactive", email=email)
+            log_error("Login failed", event="auth", email=email, reason="inactive")
             return None
-        
         if not verify_password(password, user.hashed_password):
-            log_error("Login failed: invalid password", email=email)
+            log_error("Login failed", event="auth", email=email, reason="invalid_password")
             return None
-        
-        log_info("User logged in successfully", user_id=user.id, email=email)
+        log_info("Login", event="auth", user_id=user.id, email=email)
         return user
     
     async def login(self, email: str, password: str) -> Optional[Token]:

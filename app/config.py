@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     nhn_log_version: str = Field(default="v2")
     nhn_log_platform: str = Field(default="API")
     
+    # Prometheus (Observability). Loki 로그는 Promtail이 /var/log/photo-api 파일을 읽어 전송
+    node_name: str = Field(default="", description="Node/Pod identifier for Prometheus labels")
+    
+    # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음. .env에 남아 있어도 오류 없이 무시
+    loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
+    loki_logs_labels: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

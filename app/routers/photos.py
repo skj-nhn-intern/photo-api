@@ -177,9 +177,8 @@ async def upload_photo(
             detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
         )
     except Exception as e:
-        # 예외 로깅 (디버깅용)
         from app.services.nhn_logger import log_exception
-        log_exception("Unexpected error during photo upload", e, user_id=current_user.id)
+        log_exception("Photo upload failed", e, event="photo", user_id=current_user.id)
         # 다른 예외도 처리
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -327,7 +326,7 @@ async def download_photo(
         )
     except Exception as e:
         from app.services.nhn_logger import log_exception
-        log_exception("Failed to download photo", e, photo_id=photo_id)
+        log_exception("Photo download failed", e, event="photo", photo_id=photo_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to download photo",

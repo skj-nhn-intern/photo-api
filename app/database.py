@@ -3,6 +3,7 @@ Database configuration and session management.
 Uses async SQLAlchemy for non-blocking database operations.
 Implements proper connection pooling to prevent memory leaks.
 """
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -15,6 +16,10 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import get_settings
+from app.utils.prometheus_metrics import db_errors_total
+
+# 표준 logging 사용 (nhn_logger import 시 models → database 순환 참조 방지)
+_logger = logging.getLogger("app")
 
 settings = get_settings()
 
@@ -72,7 +77,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Dependency that provides a database session.
     Ensures proper cleanup of connections after each request.
-    
+
     Usage:
         @app.get("/items")
         async def get_items(db: AsyncSession = Depends(get_db)):
@@ -83,6 +88,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
         except Exception:
+            db_errors_total.inc()
+            _logger.exception("Database session failed", exc_info=True, extra={"event": "db"})
             await session.rollback()
             raise
         finally:
@@ -104,6 +111,7 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
         except Exception:
+            _logger.exception("Database context failed", exc_info=True, extra={"event": "db"})
             await session.rollback()
             raise
         finally:

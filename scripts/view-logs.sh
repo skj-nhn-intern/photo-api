@@ -5,13 +5,6 @@
 
 SERVICE_NAME="photo-api"
 
-# 색상 정의
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
 show_help() {
     echo "Photo API 로그 확인 스크립트"
     echo ""
@@ -68,7 +61,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            echo -e "${RED}알 수 없는 옵션: $1${NC}"
+            echo "알 수 없는 옵션: $1"
             show_help
             exit 1
             ;;
@@ -94,12 +87,11 @@ if [ "$ERROR_ONLY" = true ]; then
     CMD="$CMD -p err"
 fi
 
-# 색상 출력 추가
 CMD="$CMD --no-pager"
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}Photo API 로그 확인${NC}"
-echo -e "${BLUE}========================================${NC}"
+echo "========================================"
+echo "Photo API 로그 확인"
+echo "========================================"
 echo ""
 
 # 명령어 실행

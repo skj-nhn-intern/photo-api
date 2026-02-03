@@ -7,7 +7,7 @@
 set -e
 
 # 설정
-APP_DIR="/etc/photo-api"
+APP_DIR="${APP_DIR:-/opt/photo-api}"
 ZIP_FILE="${APP_DIR}/photo-api.zip"
 ENVIRONMENT="${ENVIRONMENT:-DEV}"
 
@@ -57,7 +57,7 @@ echo "OK: 파일 정리 완료"
 
 # 4. 압축 해제
 echo "[4/9] 압축 파일 해제 중..."
-# 현재 디렉토리(/etc/photo-api)에 압축 해제
+# 현재 디렉토리(APP_DIR)에 압축 해제
 unzip -q -o photo-api.zip
 
 # 압축 해제 후 photo-api 디렉토리가 생성되었는지 확인
@@ -123,8 +123,9 @@ cat > "$WRAPPER_SCRIPT" << 'WRAPPER_EOF'
 #!/bin/bash
 # Photo API 실행 wrapper 스크립트
 # .env 파일을 로드하고 uvicorn 실행
+# APP_DIR은 아래 한 줄만 치환됩니다.
 
-APP_DIR="/etc/photo-api"
+APP_DIR="__APP_DIR__"
 cd "$APP_DIR" || {
     echo "ERROR: Cannot change to directory: $APP_DIR" >&2
     exit 1
@@ -174,6 +175,9 @@ fi
 # uvicorn 실행
 exec "$APP_DIR/venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port 8000
 WRAPPER_EOF
+
+# 부모 스크립트의 APP_DIR을 wrapper에 반영 (동일 경로에서 .env/venv 사용)
+sed "s#__APP_DIR__#$APP_DIR#g" "$WRAPPER_SCRIPT" > "${WRAPPER_SCRIPT}.tmp" && mv "${WRAPPER_SCRIPT}.tmp" "$WRAPPER_SCRIPT"
 
 chmod +x "$WRAPPER_SCRIPT"
 echo "OK: 실행 스크립트 생성 완료: $WRAPPER_SCRIPT"
