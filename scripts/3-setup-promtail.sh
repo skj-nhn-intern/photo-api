@@ -7,9 +7,9 @@ set -euo pipefail
 
 PROMTAIL_VERSION="${PROMTAIL_VERSION:-3.6.4}"
 PROMTAIL_HOME="/opt/promtail"
-CONF_SOURCE="${PROMTAIL_CONF_SOURCE:-/opt/promtail/promtail-config.yaml}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONF="$SCRIPT_DIR/../conf/promtail-config.yaml"
+CONF_SOURCE="${PROMTAIL_CONF_SOURCE:-}"
 
 if [[ -z "${CONF_SOURCE}" ]]; then
   if [[ -f "$DEFAULT_CONF" ]]; then
