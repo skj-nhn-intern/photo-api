@@ -84,4 +84,10 @@ echo "[6/6] systemd 리로드 및 서비스 활성화..."
 systemctl daemon-reload
 systemctl enable photo-api.service
 
-echo "photo-api systemd 설정 완료. (시작: systemctl start photo-api)"
+# 인스턴스 내 systemctl 실행 스크립트 (시작/중지/재시작/상태)
+if [[ -f "$SERVICE_HOME/scripts/run-services.sh" ]]; then
+  chmod +x "$SERVICE_HOME/scripts/run-services.sh"
+  ln -sf "$SERVICE_HOME/scripts/run-services.sh" /usr/local/bin/photo-api-run 2>/dev/null || true
+fi
+
+echo "photo-api systemd 설정 완료. (수동 실행: sudo photo-api-run start|stop|restart|status)"

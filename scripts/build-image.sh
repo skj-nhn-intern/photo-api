@@ -9,16 +9,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== 1/4 Python 3.11 설치 ==="
-./1-install-python.sh
+bash "$SCRIPT_DIR/1-install-python.sh"
 
 echo "=== 2/4 photo-api systemd 패키징 ==="
-./2-setup-photo-api.sh
+bash "$SCRIPT_DIR/2-setup-photo-api.sh"
 
 echo "=== 3/4 Promtail 설치 및 구성 ==="
-./3-setup-promtail.sh
+bash "$SCRIPT_DIR/3-setup-promtail.sh"
 
 echo "=== 4/4 Telegraf 설치 및 구성 ==="
-./4-setup-telegraf.sh
+bash "$SCRIPT_DIR/4-setup-telegraf.sh"
 
 echo "=== 이미지 빌드 스크립트 완료 ==="
 echo "서비스 시작: systemctl start photo-api promtail telegraf"
