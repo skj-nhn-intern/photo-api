@@ -36,6 +36,7 @@ rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.
   cp -a "$PHOTO_API_SOURCE/app" "$PHOTO_API_SOURCE/requirements.txt" "$SERVICE_HOME/"
   [[ -f "$PHOTO_API_SOURCE/alembic.ini" ]] && cp -a "$PHOTO_API_SOURCE/alembic.ini" "$SERVICE_HOME/" || true
   [[ -d "$PHOTO_API_SOURCE/alembic" ]] && cp -a "$PHOTO_API_SOURCE/alembic" "$SERVICE_HOME/" || true
+  [[ -d "$PHOTO_API_SOURCE/conf" ]] && cp -a "$PHOTO_API_SOURCE/conf" "$SERVICE_HOME/" || true
 }
 
 echo "[3/6] 전용 사용자 생성 (없으면)..."

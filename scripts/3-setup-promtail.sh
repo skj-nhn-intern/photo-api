@@ -8,14 +8,17 @@ set -euo pipefail
 PROMTAIL_VERSION="${PROMTAIL_VERSION:-3.6.4}"
 PROMTAIL_HOME="/opt/promtail"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_CONF="$SCRIPT_DIR/../conf/promtail-config.yaml"
 CONF_SOURCE="${PROMTAIL_CONF_SOURCE:-}"
-
+# 설정은 항상 repo의 ./conf 에서 복사: 스크립트 상위 conf → 2단계에서 복사된 /opt/photo-api/conf
 if [[ -z "${CONF_SOURCE}" ]]; then
-  if [[ -f "$DEFAULT_CONF" ]]; then
-    CONF_SOURCE="$DEFAULT_CONF"
-  else
-    echo "오류: promtail-config.yaml을 찾을 수 없습니다. PROMTAIL_CONF_SOURCE를 지정하세요." >&2
+  for cand in "$SCRIPT_DIR/../conf/promtail-config.yaml" "/opt/photo-api/conf/promtail-config.yaml"; do
+    if [[ -f "$cand" ]]; then
+      CONF_SOURCE="$cand"
+      break
+    fi
+  done
+  if [[ -z "${CONF_SOURCE}" ]] || [[ ! -f "$CONF_SOURCE" ]]; then
+    echo "오류: conf/promtail-config.yaml을 찾을 수 없습니다. PROMTAIL_CONF_SOURCE를 지정하세요." >&2
     exit 1
   fi
 fi
