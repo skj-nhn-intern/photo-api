@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+# 실행 권한 없이도 동작하도록 chmod (clone 후 바로 실행 가능)
+chmod +x 1-install-python.sh 2-setup-photo-api.sh 3-setup-promtail.sh 4-setup-telegraf.sh run-services.sh 2>/dev/null || true
 
 echo "=== 1/4 Python 3.11 설치 ==="
 bash "$SCRIPT_DIR/1-install-python.sh"

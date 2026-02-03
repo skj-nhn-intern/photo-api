@@ -7,7 +7,7 @@ set -euo pipefail
 
 TELEGRAF_VERSION="${TELEGRAF_VERSION:-1.37.1}"
 TELEGRAF_HOME="/opt/telegraf"
-CONF_SOURCE="${TELEGRAF_CONF_SOURCE:-}"
+CONF_SOURCE="${TELEGRAF_CONF_SOURCE:-/opt/telegraf/telegraf.conf}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONF="$SCRIPT_DIR/../conf/telegraf.conf"
 
