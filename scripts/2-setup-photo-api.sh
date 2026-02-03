@@ -1,148 +1,87 @@
-#!/bin/bash
-# 2. Photo API 압축 해제 및 실행 (프로젝트 복사 → venv → systemd)
-# 사용법: sudo ./2-setup-photo-api.sh
-# 전제: 1-install-python.sh 실행 완료, 프로젝트 파일이 scripts의 부모(레포 루트)에 있음
+#!/usr/bin/env bash
+# Ubuntu 인스턴스 이미지 빌드 2단계: photo-api를 systemd 서비스로 패키징
+# 사용: sudo PHOTO_API_SOURCE=/path/to/photo-api ./scripts/2-setup-photo-api.sh
+# 기본: PHOTO_API_SOURCE는 스크립트 기준 프로젝트 루트(scripts/../) 또는 /opt/photo-api
+set -euo pipefail
 
-set -e
-
-SERVICE_USER="${SUDO_USER:-$USER}"
-SERVICE_HOME="/opt/photo-api"
-SERVICE_NAME="photo-api"
-ENVIRONMENT="${ENVIRONMENT:-DEV}"
-
+SERVICE_HOME="${SERVICE_HOME:-/opt/photo-api}"
+PHOTO_API_SOURCE="${PHOTO_API_SOURCE:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_SOURCE="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "========================================"
-echo "[2/4] Photo API 배포 및 실행"
-echo "========================================"
-echo ""
-
-echo "서비스 디렉토리 설정 중..."
-sudo mkdir -p "$SERVICE_HOME"
-sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_HOME"
-echo "애플리케이션 파일 복사 중... ($REPO_ROOT -> $SERVICE_HOME)"
-sudo -u "$SERVICE_USER" cp -r "$REPO_ROOT"/* "$SERVICE_HOME/" 2>/dev/null || sudo cp -r "$REPO_ROOT"/* "$SERVICE_HOME/"
-if [ -d "$SERVICE_HOME/scripts" ]; then
-    sudo chmod +x "$SERVICE_HOME/scripts"/*.sh 2>/dev/null || true
+if [[ -z "${PHOTO_API_SOURCE}" ]]; then
+  if [[ -f "$DEFAULT_SOURCE/app/main.py" ]] && [[ -f "$DEFAULT_SOURCE/requirements.txt" ]]; then
+    PHOTO_API_SOURCE="$DEFAULT_SOURCE"
+  else
+    PHOTO_API_SOURCE="$SERVICE_HOME"
+  fi
 fi
-sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_HOME"
-echo "파일 복사 완료"
-echo ""
 
-cd "$SERVICE_HOME"
+echo "PHOTO_API_SOURCE=$PHOTO_API_SOURCE"
+echo "SERVICE_HOME=$SERVICE_HOME"
 
-echo "가상환경 생성 중..."
-if [ ! -d "venv" ]; then
-    sudo -u "$SERVICE_USER" python3.11 -m venv venv
+if [[ ! -f "$PHOTO_API_SOURCE/app/main.py" ]] || [[ ! -f "$PHOTO_API_SOURCE/requirements.txt" ]]; then
+  echo "오류: app/main.py 또는 requirements.txt를 찾을 수 없습니다. PHOTO_API_SOURCE를 지정하세요." >&2
+  exit 1
 fi
-sudo -u "$SERVICE_USER" ./venv/bin/pip install --upgrade pip
-sudo -u "$SERVICE_USER" ./venv/bin/pip install -r requirements.txt
-echo "의존성 설치 완료"
-echo ""
 
-echo "환경 변수 파일 확인 중..."
-if [ ! -f ".env" ]; then
-    if [ "$ENVIRONMENT" = "PRODUCTION" ]; then
-        DEBUG_VALUE="False"
-        ENV_MODE="PRODUCTION"
-    else
-        DEBUG_VALUE="True"
-        ENV_MODE="DEV"
-    fi
-    sudo -u "$SERVICE_USER" cat > .env << EOF
-ENVIRONMENT=${ENV_MODE}
-APP_NAME=Photo API
-APP_VERSION=1.0.0
-DEBUG=${DEBUG_VALUE}
-SECRET_KEY=change-me-in-production
-DATABASE_URL=sqlite+aiosqlite:///./photo_api.db
-JWT_SECRET_KEY=jwt-secret-change-in-production
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-NHN_STORAGE_IAM_USER=
-NHN_STORAGE_IAM_PASSWORD=
-NHN_STORAGE_PROJECT_ID=
-NHN_STORAGE_TENANT_ID=
-NHN_STORAGE_AUTH_URL=https://api-identity-infrastructure.nhncloudservice.com/v2.0
-NHN_STORAGE_URL=https://api-storage.nhncloudservice.com/v1
-NHN_STORAGE_CONTAINER=photo-container
-NHN_CDN_DOMAIN=
-NHN_CDN_APP_KEY=
-NHN_CDN_SECRET_KEY=
-NHN_CDN_ENCRYPT_KEY=
-NHN_CDN_TOKEN_EXPIRE_SECONDS=3600
-NHN_LOG_APPKEY=
-NHN_LOG_URL=https://api-logncrash.nhncloudservice.com/v2/log
-NHN_LOG_VERSION=v2
-NHN_LOG_PLATFORM=API
-EOF
-    echo ".env를 생성했습니다. 필수 값을 설정한 뒤 서비스를 재시작하세요."
-else
-    echo ".env 존재함"
-fi
-echo ""
+echo "[1/6] 디렉터리 생성..."
+mkdir -p "$SERVICE_HOME"
+mkdir -p /var/log/photo-api
+chmod 755 /var/log/photo-api
 
-LOG_DIR="/var/log/${SERVICE_NAME}"
-echo "로그 디렉토리 생성 중..."
-sudo mkdir -p "$LOG_DIR"
-sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
-echo "로그 디렉토리: $LOG_DIR"
-echo ""
+echo "[2/6] photo-api 소스 복사..."
+rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' --exclude='venv' \
+  "$PHOTO_API_SOURCE/" "$SERVICE_HOME/" 2>/dev/null || {
+  cp -a "$PHOTO_API_SOURCE/app" "$PHOTO_API_SOURCE/requirements.txt" "$SERVICE_HOME/"
+  [[ -f "$PHOTO_API_SOURCE/alembic.ini" ]] && cp -a "$PHOTO_API_SOURCE/alembic.ini" "$SERVICE_HOME/" || true
+  [[ -d "$PHOTO_API_SOURCE/alembic" ]] && cp -a "$PHOTO_API_SOURCE/alembic" "$SERVICE_HOME/" || true
+}
 
-echo "systemd 서비스 등록 중..."
-sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << EOF
+echo "[3/6] 전용 사용자 생성 (없으면)..."
+id -u photo-api &>/dev/null || useradd -r -s /usr/sbin/nologin -d "$SERVICE_HOME" photo-api 2>/dev/null || true
+chown -R photo-api:photo-api "$SERVICE_HOME" /var/log/photo-api 2>/dev/null || chown -R root:root "$SERVICE_HOME" /var/log/photo-api
+
+echo "[4/6] Python 3.11 가상환경 및 의존성 설치..."
+"${PYTHON3_11:-python3.11}" -m venv "$SERVICE_HOME/venv"
+"$SERVICE_HOME/venv/bin/pip" install --upgrade pip -q
+"$SERVICE_HOME/venv/bin/pip" install -r "$SERVICE_HOME/requirements.txt" -q
+
+echo "[5/6] systemd 서비스 유닛 설치..."
+cat > /etc/systemd/system/photo-api.service << 'SVC'
 [Unit]
-Description=Photo API Backend Service
+Description=Photo API (FastAPI)
 After=network.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$SERVICE_HOME
-Environment="PATH=$SERVICE_HOME/venv/bin"
-Environment="PYTHONPATH=$SERVICE_HOME"
-Environment="PYTHONUNBUFFERED=1"
-ExecStart=$SERVICE_HOME/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-Restart=always
-RestartSec=10
+User=photo-api
+Group=photo-api
+WorkingDirectory=/opt/photo-api
+Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/opt/photo-api/.env
+ExecStart=/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=$SERVICE_NAME
-NoNewPrivileges=true
-PrivateTmp=true
+SyslogIdentifier=photo-api
+
+# 로그 디렉터리 (Promtail 수집용)
+ReadWritePaths=/var/log/photo-api
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SVC
 
-sudo tee "/etc/logrotate.d/${SERVICE_NAME}" > /dev/null << EOF
-$LOG_DIR/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 $SERVICE_USER $SERVICE_USER
-    sharedscripts
-    postrotate
-        systemctl reload $SERVICE_NAME > /dev/null 2>&1 || true
-    endscript
-}
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl restart "$SERVICE_NAME" 2>/dev/null || sudo systemctl start "$SERVICE_NAME"
-sleep 2
-if sudo systemctl is-active --quiet "$SERVICE_NAME"; then
-    echo "Photo API 서비스 시작 완료 (port 8000)"
-else
-    echo "서비스 시작 실패. 로그: sudo journalctl -u $SERVICE_NAME -n 50"
-    exit 1
+# User가 없으면 root로 동작하도록 fallback
+if ! id -u photo-api &>/dev/null; then
+  sed -i 's/User=photo-api/User=root/' /etc/systemd/system/photo-api.service
+  sed -i 's/Group=photo-api/Group=root/' /etc/systemd/system/photo-api.service
 fi
-echo ""
-echo "========================================"
-echo "[2/4] 완료. 다음: sudo ./3-setup-promtail.sh"
-echo "========================================"
+
+echo "[6/6] systemd 리로드 및 서비스 활성화..."
+systemctl daemon-reload
+systemctl enable photo-api.service
+
+echo "photo-api systemd 설정 완료. (시작: systemctl start photo-api)"
