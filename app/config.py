@@ -60,13 +60,17 @@ class Settings(BaseSettings):
     nhn_storage_iam_user: str = Field(default="", description="IAM 사용자명 또는 API 사용자명")
     nhn_storage_iam_password: str = Field(default="", description="API 비밀번호 (Object Storage API 접근용, IAM 사용자 비밀번호와 다를 수 있음)")
     nhn_storage_project_id: str = Field(default="", description="IAM 프로젝트 ID")
+    # 서비스 게이트웨이 사용 시: NHN 콘솔에서 내부(프라이빗) 엔드포인트 URL 확인 후 .env에 설정
+    # 예: 내부 URL이 있다면 NHN_STORAGE_AUTH_URL=https://internal-identity.xxx/v2.0
     nhn_storage_auth_url: str = Field(
         default="https://api-identity-infrastructure.nhncloudservice.com/v2.0",
-        description="IAM 인증 URL (v2.0 API 사용)"
+        description="IAM 인증 URL. 서비스 게이트웨이 사용 시 내부 엔드포인트로 설정"
     )
     nhn_storage_container: str = Field(default="photo-container")
+    # 서비스 게이트웨이 사용 시 Object Storage 내부 URL로 설정 가능
     nhn_storage_url: str = Field(
-        default="https://api-storage.nhncloudservice.com/v1"
+        default="https://api-storage.nhncloudservice.com/v1",
+        description="Object Storage URL. 서비스 게이트웨이 사용 시 내부 엔드포인트로 설정"
     )
     # Tenant ID (Object Storage Account에 사용)
     # IAM 인증 응답에서 자동 추출되지만, 명시적으로 설정할 수도 있음

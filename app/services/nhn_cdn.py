@@ -148,7 +148,7 @@ class NHNCDNService:
             if time.time() < expire_time - 60:  # 1분 여유
                 return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
         
-        # Auth Token 생성
+        # Auth Token 생성 (CDN API 호출)
         token = await self._request_auth_token(cdn_path, expires_in)
         
         if token:
@@ -156,8 +156,13 @@ class NHNCDNService:
             self._token_cache[cache_key] = (token, time.time() + expires_in)
             return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={token}"
         else:
-            # 토큰 생성 실패시 Object Storage URL 반환
-            return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+            # 토큰 실패 시: CDN 경로만 반환 (클라이언트는 CDN으로 요청, 토큰 없으면 403)
+            # Object Storage URL fallback 제거 → 이미지는 항상 CDN 경로로만 제공
+            logger.warning(
+                "CDN auth token failed, returning CDN URL without token (may 403)",
+                extra={"event": "cdn", "path": cdn_path},
+            )
+            return f"https://{self.settings.nhn_cdn_domain}{cdn_path}"
     
     def generate_auth_token_url_sync(
         self,
