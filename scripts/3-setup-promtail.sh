@@ -7,8 +7,8 @@ PROMTAIL_VERSION="${PROMTAIL_VERSION:-3.6.4}"
 PROMTAIL_HOME="/opt/promtail"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 인스턴스 IP 자동 감지 (ip addr에서 사설 IP 추출)
-INSTANCE_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127\.' | head -1)
+# 인스턴스 IP: 환경변수 없으면 hostname -I 첫 번째 값
+INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 INSTANCE_IP="${INSTANCE_IP:-127.0.0.1}"
 
 # 설정 파일 찾기

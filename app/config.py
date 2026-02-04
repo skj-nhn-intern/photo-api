@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     # Prometheus (Observability). Loki 로그는 Promtail이 /var/log/photo-api 파일을 읽어 전송
     node_name: str = Field(default="", description="Node/Pod identifier for Prometheus labels")
     
+    # 인스턴스 식별용 사설 IP (로그·메트릭용). 비우면 자동 감지(ip addr), 오토스케일 시 서버마다 다름
+    instance_ip: str = Field(default="", description="서버 사설 IP (비우면 자동 감지)")
+    
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음. .env에 남아 있어도 오류 없이 무시
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
     loki_logs_labels: str | None = Field(default=None, description="Deprecated: use Promtail for logs")

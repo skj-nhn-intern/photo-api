@@ -41,25 +41,24 @@ _SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret
 
 
 def _get_primary_ip() -> str:
-    """사설 IP 반환 (ip addr에서 추출). 실패 시 hostname 반환."""
-    import subprocess
-    import re
-    
+    """환경변수 INSTANCE_IP 사용. 없으면 hostname -I 첫 번째 값."""
+    ip = (get_settings().instance_ip or "").strip()
+    if ip:
+        return ip
     try:
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show"],
+        import subprocess
+        r = subprocess.run(
+            ["hostname", "-I"],
             capture_output=True,
             text=True,
             timeout=2,
         )
-        if result.returncode == 0:
-            for match in re.finditer(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result.stdout):
-                ip = match.group(1)
-                if not ip.startswith("127."):
-                    return ip
+        if r.returncode == 0 and r.stdout:
+            first = r.stdout.strip().split()
+            if first:
+                return first[0]
     except Exception:
         pass
-    
     return socket.gethostname()
 
 

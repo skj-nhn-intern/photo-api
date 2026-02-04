@@ -42,31 +42,28 @@ request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 
 def _get_instance_ip() -> str:
-    """인스턴스 사설 IP 반환 (ip addr에서 추출). 실패 시 hostname 사용."""
-    import subprocess
-    import re
-    
+    """환경변수 INSTANCE_IP 사용. 없으면 hostname -I 첫 번째 값."""
+    ip = (get_settings().instance_ip or "").strip()
+    if ip:
+        return ip
     try:
-        # ip addr에서 첫 번째 비-loopback IPv4 추출
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show"],
+        import subprocess
+        r = subprocess.run(
+            ["hostname", "-I"],
             capture_output=True,
             text=True,
             timeout=2,
         )
-        if result.returncode == 0:
-            # inet 192.168.1.107/24 형식에서 IP만 추출
-            for match in re.finditer(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result.stdout):
-                ip = match.group(1)
-                if not ip.startswith("127."):
-                    return ip
+        if r.returncode == 0 and r.stdout:
+            first = r.stdout.strip().split()
+            if first:
+                return first[0]
     except Exception:
         pass
-    
     return socket.gethostname()
 
 
-# 인스턴스 IP (한 번만 계산)
+# 인스턴스 IP (env 또는 hostname -I)
 INSTANCE_IP = _get_instance_ip()
 
 
