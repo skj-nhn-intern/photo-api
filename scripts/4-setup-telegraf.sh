@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Telegraf 설치 스크립트
-# 사용: sudo ./scripts/4-setup-telegraf.sh
-# 환경변수는 /etc/default/photo-api 에서 로드 (build-image.sh 가 생성)
+# 환경변수는 /opt/photo-api/.env 에서 로드
 set -euo pipefail
 
 TELEGRAF_VERSION="${TELEGRAF_VERSION:-1.37.1}"
@@ -39,7 +38,6 @@ if [[ -z "$TELEGRAF_BIN" ]]; then
   exit 1
 fi
 
-# 실행 중이면 중지
 systemctl is-active --quiet telegraf.service 2>/dev/null && systemctl stop telegraf.service || true
 cp "$TELEGRAF_BIN" "$TELEGRAF_HOME/telegraf"
 rm -rf /tmp/telegraf-*
@@ -49,8 +47,6 @@ echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$TELEGRAF_HOME/telegraf.conf"
 
 echo "[4/4] systemd 서비스 설치..."
-# 환경변수는 /etc/default/photo-api 에서 로드
-# Telegraf는 ${INFLUX_URL}, ${INFLUX_TOKEN} 등을 자동 치환
 cat > /etc/systemd/system/telegraf.service << 'EOF'
 [Unit]
 Description=Telegraf
@@ -59,7 +55,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/photo-api
+EnvironmentFile=/opt/photo-api/.env
 ExecStart=/opt/telegraf/telegraf --config /opt/telegraf/telegraf.conf
 Restart=on-failure
 RestartSec=5
@@ -71,4 +67,4 @@ EOF
 systemctl daemon-reload
 systemctl enable telegraf.service
 
-echo "완료. 시작: sudo systemctl start telegraf"
+echo "Telegraf 설정 완료."

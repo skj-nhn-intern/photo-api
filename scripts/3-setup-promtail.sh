@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Promtail 설치 스크립트
-# 사용: sudo ./scripts/3-setup-promtail.sh
-# 환경변수는 /etc/default/photo-api 에서 로드 (build-image.sh 가 생성)
+# 환경변수는 /opt/photo-api/.env 에서 로드
 set -euo pipefail
 
 PROMTAIL_VERSION="${PROMTAIL_VERSION:-3.6.4}"
@@ -42,8 +41,6 @@ echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
 
 echo "[4/4] systemd 서비스 설치..."
-# 환경변수는 /etc/default/photo-api 에서 로드
-# Promtail은 -config.expand-env=true 로 ${LOKI_URL}, ${INSTANCE_IP} 치환
 cat > /etc/systemd/system/promtail.service << 'EOF'
 [Unit]
 Description=Promtail
@@ -52,7 +49,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/photo-api
+EnvironmentFile=/opt/photo-api/.env
 ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
 Restart=on-failure
 RestartSec=5
@@ -64,4 +61,4 @@ EOF
 systemctl daemon-reload
 systemctl enable promtail.service
 
-echo "완료. 시작: sudo systemctl start promtail"
+echo "Promtail 설정 완료."
