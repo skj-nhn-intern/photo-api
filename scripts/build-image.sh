@@ -1,9 +1,43 @@
 #!/usr/bin/env bash
 # Ubuntu 인스턴스 이미지 빌드: 1~4단계 순차 실행
 # Packer/이미지 빌드 VM에서 실행하거나, 새 Ubuntu 인스턴스에서 한 번에 설정할 때 사용
-# 사용: sudo ./scripts/build-image.sh!
-# 환경변수: PHOTO_API_SOURCE, PROMTAIL_VERSION, TELEGRAF_VERSION, LOKI_URL, INFLUX_URL, INFLUX_TOKEN
+#
+# 사용법:
+#   export LOKI_URL=http://loki:3100
+#   export INFLUX_URL=http://influx:8086 INFLUX_TOKEN=... INFLUX_ORG=... INFLUX_BUCKET=...
+#   sudo -E ./scripts/build-image.sh
+#
+# 환경변수 (필수):
+#   LOKI_URL      - Loki 서버 URL (예: http://192.168.4.73:3100)
+#   INFLUX_URL    - InfluxDB 서버 URL
+#   INFLUX_TOKEN  - InfluxDB 인증 토큰
+#   INFLUX_ORG    - InfluxDB 조직명
+#   INFLUX_BUCKET - InfluxDB 버킷명
+# 환경변수 (선택):
+#   INSTANCE_IP   - 인스턴스 IP (미설정 시 자동 감지)
+#   PROMTAIL_VERSION, TELEGRAF_VERSION
 set -euo pipefail
+
+# 필수 환경변수 검증
+missing=()
+[[ -z "${LOKI_URL:-}" ]] && missing+=("LOKI_URL")
+[[ -z "${INFLUX_URL:-}" ]] && missing+=("INFLUX_URL")
+[[ -z "${INFLUX_TOKEN:-}" ]] && missing+=("INFLUX_TOKEN")
+[[ -z "${INFLUX_ORG:-}" ]] && missing+=("INFLUX_ORG")
+[[ -z "${INFLUX_BUCKET:-}" ]] && missing+=("INFLUX_BUCKET")
+
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "오류: 필수 환경변수가 설정되지 않았습니다: ${missing[*]}" >&2
+  echo "사용법: sudo -E $0  (환경변수를 먼저 export 후 실행)" >&2
+  exit 1
+fi
+
+echo "=== 환경변수 확인 ==="
+echo "  LOKI_URL=$LOKI_URL"
+echo "  INFLUX_URL=$INFLUX_URL"
+echo "  INFLUX_ORG=$INFLUX_ORG"
+echo "  INFLUX_BUCKET=$INFLUX_BUCKET"
+echo "  INSTANCE_IP=${INSTANCE_IP:-자동감지}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"

@@ -40,10 +40,21 @@ chmod +x "$PROMTAIL_HOME/promtail"
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
 
+# 필수 환경변수 확인
+if [[ -z "${LOKI_URL:-}" ]]; then
+  echo "오류: LOKI_URL 환경변수가 설정되지 않았습니다." >&2
+  echo "사용법: LOKI_URL=http://loki:3100 sudo -E $0" >&2
+  exit 1
+fi
+INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+INSTANCE_IP="${INSTANCE_IP:-127.0.0.1}"
+
+echo "  LOKI_URL=$LOKI_URL"
+echo "  INSTANCE_IP=$INSTANCE_IP"
+
 echo "[4/4] systemd 서비스 설치..."
-# Promtail은 -config.expand-env=true 로 설정 파일의 ${LOKI_URL}, ${INSTANCE_IP} 등을 프로세스 환경에서 치환함.
-# EnvironmentFile: /etc/environment (시스템 전역) + /etc/default/photo-api (서비스 전용, 선택)
-cat > /etc/systemd/system/promtail.service << 'EOF'
+# 현재 셸의 환경변수를 systemd unit에 직접 주입
+cat > /etc/systemd/system/promtail.service << EOF
 [Unit]
 Description=Promtail
 After=network-online.target
@@ -51,8 +62,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/environment
-EnvironmentFile=-/etc/default/photo-api
+Environment="LOKI_URL=$LOKI_URL"
+Environment="INSTANCE_IP=$INSTANCE_IP"
 ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
 Restart=on-failure
 RestartSec=5

@@ -47,10 +47,23 @@ chmod +x "$TELEGRAF_HOME/telegraf"
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$TELEGRAF_HOME/telegraf.conf"
 
+# 필수 환경변수 확인
+if [[ -z "${INFLUX_URL:-}" ]]; then
+  echo "오류: INFLUX_URL 환경변수가 설정되지 않았습니다." >&2
+  echo "사용법: INFLUX_URL=http://influx:8086 INFLUX_TOKEN=... sudo -E $0" >&2
+  exit 1
+fi
+: "${INFLUX_TOKEN:?INFLUX_TOKEN 환경변수가 설정되지 않았습니다}"
+: "${INFLUX_ORG:?INFLUX_ORG 환경변수가 설정되지 않았습니다}"
+: "${INFLUX_BUCKET:?INFLUX_BUCKET 환경변수가 설정되지 않았습니다}"
+
+echo "  INFLUX_URL=$INFLUX_URL"
+echo "  INFLUX_ORG=$INFLUX_ORG"
+echo "  INFLUX_BUCKET=$INFLUX_BUCKET"
+
 echo "[4/4] systemd 서비스 설치..."
-# Telegraf는 설정 파일의 ${INFLUX_URL}, ${INFLUX_TOKEN} 등을 프로세스 환경에서 치환함.
-# EnvironmentFile: /etc/environment (시스템 전역) + /etc/default/photo-api (서비스 전용, 선택)
-cat > /etc/systemd/system/telegraf.service << 'EOF'
+# 현재 셸의 환경변수를 systemd unit에 직접 주입
+cat > /etc/systemd/system/telegraf.service << EOF
 [Unit]
 Description=Telegraf
 After=network-online.target
@@ -58,8 +71,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/environment
-EnvironmentFile=-/etc/default/photo-api
+Environment="INFLUX_URL=$INFLUX_URL"
+Environment="INFLUX_TOKEN=$INFLUX_TOKEN"
+Environment="INFLUX_ORG=$INFLUX_ORG"
+Environment="INFLUX_BUCKET=$INFLUX_BUCKET"
 ExecStart=/opt/telegraf/telegraf --config /opt/telegraf/telegraf.conf
 Restart=on-failure
 RestartSec=5
