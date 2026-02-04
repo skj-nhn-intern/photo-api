@@ -60,7 +60,7 @@ User=photo-api
 Group=photo-api
 WorkingDirectory=/opt/photo-api
 Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=-/opt/photo-api/.env
+EnvironmentFile=-/etc/default/photo-api
 ExecStart=/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5

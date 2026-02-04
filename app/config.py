@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     nhn_storage_iam_user: str = Field(default="", description="IAM 사용자명 또는 API 사용자명")
     nhn_storage_iam_password: str = Field(default="", description="API 비밀번호 (Object Storage API 접근용, IAM 사용자 비밀번호와 다를 수 있음)")
     nhn_storage_project_id: str = Field(default="", description="IAM 프로젝트 ID")
-    # 서비스 게이트웨이 사용 시: NHN 콘솔에서 내부(프라이빗) 엔드포인트 URL 확인 후 .env에 설정
+    # 서비스 게이트웨이 사용 시: NHN 콘솔에서 내부(프라이빗) 엔드포인트 URL 확인 후 환경변수로 설정
     # 예: 내부 URL이 있다면 NHN_STORAGE_AUTH_URL=https://internal-identity.xxx/v2.0
     nhn_storage_auth_url: str = Field(
         default="https://api-identity-infrastructure.nhncloudservice.com/v2.0",
@@ -100,13 +100,13 @@ class Settings(BaseSettings):
     # 인스턴스 식별용 사설 IP (로그·메트릭용). 비우면 자동 감지(ip addr), 오토스케일 시 서버마다 다름
     instance_ip: str = Field(default="", description="서버 사설 IP (비우면 자동 감지)")
     
-    # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음. .env에 남아 있어도 오류 없이 무시
+    # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
     loki_logs_labels: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
     
     class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+        # 환경변수만 사용 (.env 파일 미사용). systemd EnvironmentFile=/etc/default/photo-api 등으로 설정
+        env_file = None
         case_sensitive = False
 
 

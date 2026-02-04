@@ -51,6 +51,6 @@ sudo photo-api-run
 
 (실제 경로: `/opt/photo-api/scripts/run-services.sh` — photo-api, promtail, telegraf 전체 기동)
 
-이미지 생성 후 앱 설정(DB, Object Storage 등)을 위해 `/opt/photo-api/.env`를 배포 시점에 넣거나, user-data 등으로 주입하면 됩니다.
+이미지 생성 후 앱 설정(DB, Object Storage 등)을 위해 `/etc/default/photo-api`에 환경변수를 설정합니다. 예시: `conf/photo-api.env.example` 참고.
 
 배포 방법은 [deploy/README.md](../deploy/README.md)를 참고하세요.
