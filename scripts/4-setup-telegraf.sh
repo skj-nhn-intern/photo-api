@@ -42,6 +42,11 @@ if [[ -z "$TELEGRAF_BIN" ]] || [[ ! -x "$TELEGRAF_BIN" ]]; then
   echo "오류: telegraf 바이너리를 찾을 수 없습니다." >&2
   exit 1
 fi
+# 실행 중인 telegraf가 있으면 cp 시 "Text file busy" 방지를 위해 중지
+if [[ -f "$TELEGRAF_HOME/telegraf" ]] && systemctl is-active --quiet telegraf.service 2>/dev/null; then
+  echo "기존 Telegraf 서비스 중지 중..."
+  systemctl stop telegraf.service
+fi
 cp "$TELEGRAF_BIN" "$TELEGRAF_HOME/telegraf"
 rm -rf /tmp/telegraf-*
 chmod +x "$TELEGRAF_HOME/telegraf"

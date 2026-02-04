@@ -1,6 +1,7 @@
 """
 Authentication dependencies for FastAPI.
 """
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -10,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import AuthService
-from app.services.nhn_logger import log_error
 from app.utils.security import decode_access_token
+
+logger = logging.getLogger("app.auth")
 
 # HTTP Bearer token security scheme
 security = HTTPBearer(auto_error=False)
@@ -41,20 +43,20 @@ async def get_current_user(
     )
 
     if not credentials:
-        log_error("Could not validate credentials", event="auth", reason="no_token")
+        logger.warning("Auth failed", extra={"event": "auth", "reason": "no_token"})
         raise credentials_exception
 
     token_payload = decode_access_token(credentials.credentials)
 
     if token_payload is None:
-        log_error("Could not validate credentials", event="auth", reason="invalid_or_expired_token")
+        logger.warning("Auth failed", extra={"event": "auth", "reason": "invalid_or_expired_token"})
         raise credentials_exception
 
     auth_service = AuthService(db)
     user = await auth_service.get_user_by_id(token_payload.sub)
 
     if user is None:
-        log_error("Could not validate credentials", event="auth", reason="user_not_found", user_id=token_payload.sub)
+        logger.warning("Auth failed", extra={"event": "auth", "reason": "user_not_found", "user_id": token_payload.sub})
         raise credentials_exception
 
     return user
@@ -76,7 +78,7 @@ async def get_current_active_user(
         HTTPException: If user is inactive
     """
     if not current_user.is_active:
-        log_error("Inactive user rejected", event="auth", reason="inactive", user_id=current_user.id)
+        logger.warning("Inactive user rejected", extra={"event": "auth", "reason": "inactive", "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",

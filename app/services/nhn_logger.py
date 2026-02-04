@@ -40,6 +40,16 @@ class LogLevel(str, Enum):
 _SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret"})
 
 
+def _get_primary_ip() -> str:
+    """기본 라우트용 네트워크 인터페이스 IP를 반환. 실패 시 hostname 반환."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return socket.gethostname()
+
+
 class NHNLoggerService:
     """
     NHN Cloud Log & Crash 전송 서비스.
@@ -64,7 +74,7 @@ class NHNLoggerService:
         self._queue: deque = deque(maxlen=self.MAX_QUEUE_SIZE)
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._hostname = socket.gethostname()
+        self._host = _get_primary_ip()  # 로깅용: hostname 대신 IP
         self._platform = platform.system()
         self._logger = logging.getLogger("app.nhn_logger")
     
@@ -112,7 +122,7 @@ class NHNLoggerService:
             "logLevel": level.value,
             "logSource": "API",
             "logType": "log",
-            "host": self._hostname,
+            "host": self._host,
             "platform": self._platform,
             "sendTime": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         }

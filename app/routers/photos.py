@@ -1,6 +1,7 @@
 """
 Photos router for photo management.
 """
+import logging
 import mimetypes
 from typing import List
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
+
+logger = logging.getLogger("app.photos")
 from app.schemas.photo import (
     PhotoCreate,
     PhotoResponse,
@@ -177,9 +180,7 @@ async def upload_photo(
             detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
         )
     except Exception as e:
-        from app.services.nhn_logger import log_exception
-        log_exception("Photo upload failed", e, event="photo", user_id=current_user.id)
-        # 다른 예외도 처리
+        logger.error("Photo upload failed", exc_info=e, extra={"event": "photo", "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
@@ -325,8 +326,7 @@ async def download_photo(
             },
         )
     except Exception as e:
-        from app.services.nhn_logger import log_exception
-        log_exception("Photo download failed", e, event="photo", photo_id=photo_id)
+        logger.error("Photo download failed", exc_info=e, extra={"event": "photo", "photo_id": photo_id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to download photo",
