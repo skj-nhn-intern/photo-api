@@ -16,7 +16,12 @@
 # 환경변수 (선택):
 #   INSTANCE_IP   - 인스턴스 IP (미설정 시 자동 감지)
 #   PROMTAIL_VERSION, TELEGRAF_VERSION
+#
+# 환경변수 변경 시:
+#   /etc/default/photo-api 파일 수정 후 systemctl restart <서비스>
 set -euo pipefail
+
+ENV_FILE="/etc/default/photo-api"
 
 # 필수 환경변수 검증
 missing=()
@@ -32,12 +37,28 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 1
 fi
 
-echo "=== 환경변수 확인 ==="
-echo "  LOKI_URL=$LOKI_URL"
-echo "  INFLUX_URL=$INFLUX_URL"
-echo "  INFLUX_ORG=$INFLUX_ORG"
-echo "  INFLUX_BUCKET=$INFLUX_BUCKET"
-echo "  INSTANCE_IP=${INSTANCE_IP:-자동감지}"
+# INSTANCE_IP 자동 감지
+INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+INSTANCE_IP="${INSTANCE_IP:-127.0.0.1}"
+
+echo "=== 환경변수를 $ENV_FILE 에 저장 ==="
+cat > "$ENV_FILE" << EOF
+# photo-api, promtail, telegraf 서비스 환경변수
+# 수정 후: sudo systemctl restart photo-api promtail telegraf
+
+# Promtail -> Loki
+LOKI_URL=$LOKI_URL
+INSTANCE_IP=$INSTANCE_IP
+
+# Telegraf -> InfluxDB
+INFLUX_URL=$INFLUX_URL
+INFLUX_TOKEN=$INFLUX_TOKEN
+INFLUX_ORG=$INFLUX_ORG
+INFLUX_BUCKET=$INFLUX_BUCKET
+EOF
+chmod 600 "$ENV_FILE"
+echo "  저장 완료: $ENV_FILE"
+cat "$ENV_FILE"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -59,3 +80,5 @@ bash "$SCRIPT_DIR/4-setup-telegraf.sh"
 echo "=== 이미지 빌드 스크립트 완료 ==="
 echo "서비스 시작: systemctl start photo-api promtail telegraf"
 echo "상태 확인: systemctl status photo-api promtail telegraf"
+echo ""
+echo "환경변수 변경: $ENV_FILE 수정 후 systemctl restart <서비스>"

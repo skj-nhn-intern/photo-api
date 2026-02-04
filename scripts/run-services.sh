@@ -1,34 +1,71 @@
 #!/bin/bash
 #
-# build-image.sh 로 구성된 인스턴스에서 서비스를 기동하는 스크립트
-# 사용법: sudo ./scripts/run-services.sh
+# 서비스 재설치 스크립트: 기존 서비스 삭제 후 다시 빌드
 #
-# 기동 서비스: photo-api, promtail, telegraf
+# 사용법:
+#   export LOKI_URL=... INFLUX_URL=... INFLUX_TOKEN=... INFLUX_ORG=... INFLUX_BUCKET=...
+#   sudo -E ./scripts/run-services.sh
+#
+# 동작:
+#   1. 기존 photo-api, promtail, telegraf 서비스 중지 및 삭제
+#   2. build-image.sh 실행 (재설치)
+#   3. 서비스 시작
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICES="photo-api promtail telegraf"
+
 if [ "$(id -u)" -ne 0 ]; then
-    echo "root 권한이 필요합니다. sudo $0 로 실행하세요."
+    echo "root 권한이 필요합니다. sudo -E $0 로 실행하세요."
     exit 1
 fi
 
 echo "=========================================="
-echo "인스턴스 서비스 기동"
+echo "1. 기존 서비스 삭제"
 echo "=========================================="
 
-systemctl start photo-api
-echo "  photo-api started"
+for svc in $SERVICES; do
+  if systemctl list-unit-files | grep -q "^${svc}.service"; then
+    echo "  $svc 서비스 발견 → 중지 및 삭제"
+    systemctl stop "$svc" 2>/dev/null || true
+    systemctl disable "$svc" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${svc}.service"
+  else
+    echo "  $svc 서비스 없음"
+  fi
+done
 
-systemctl start promtail
-echo "  promtail started"
+systemctl daemon-reload
+echo "  systemd 리로드 완료"
 
-systemctl start telegraf
-echo "  telegraf started"
+echo ""
+echo "=========================================="
+echo "2. 서비스 재설치 (build-image.sh)"
+echo "=========================================="
+
+bash "$SCRIPT_DIR/build-image.sh"
+
+echo ""
+echo "=========================================="
+echo "3. 서비스 시작"
+echo "=========================================="
+
+for svc in $SERVICES; do
+  systemctl start "$svc"
+  echo "  $svc started"
+done
 
 echo ""
 echo "상태 확인:"
-systemctl is-active --quiet photo-api  && echo "  photo-api: active" || echo "  photo-api: failed"
-systemctl is-active --quiet promtail   && echo "  promtail:  active" || echo "  promtail:  failed"
-systemctl is-active --quiet telegraf  && echo "  telegraf:  active" || echo "  telegraf:  failed"
+for svc in $SERVICES; do
+  if systemctl is-active --quiet "$svc"; then
+    echo "  $svc: active"
+  else
+    echo "  $svc: failed"
+  fi
+done
+
 echo ""
-echo "자세한 상태: systemctl status photo-api promtail telegraf"
+echo "자세한 상태: systemctl status $SERVICES"
+echo "환경변수 변경: /etc/default/photo-api 수정 후 systemctl restart $SERVICES"
