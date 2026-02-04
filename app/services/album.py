@@ -1,6 +1,7 @@
 """
 Album service for managing albums and shared links.
 """
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -15,10 +16,10 @@ from app.models.user import User
 from app.schemas.album import AlbumCreate, AlbumUpdate, AlbumWithPhotos
 from app.schemas.share import ShareLinkCreate, ShareLinkResponse, SharedAlbumResponse
 from app.services.photo import PhotoService
-from app.services.nhn_logger import log_info, log_error
 from app.utils.security import generate_share_token
 from app.config import get_settings
 
+logger = logging.getLogger("app.album")
 settings = get_settings()
 
 
@@ -332,7 +333,8 @@ class AlbumService:
         self.db.add(share_link)
         await self.db.flush()
         await self.db.refresh(share_link)
-        log_info("Share link created", event="share", share_id=share_link.id, album_id=album.id)
+        # 공유링크 생성은 INFO (중요 비즈니스 이벤트)
+        logger.info("Share link created", extra={"event": "share", "share_id": share_link.id, "album_id": album.id})
         return share_link
     
     async def get_share_link_by_token(
@@ -432,7 +434,8 @@ class AlbumService:
             SharedAlbumResponse if valid, None otherwise
         """
         if not share_link.is_valid:
-            log_error("Share access denied", event="share", share_id=share_link.id)
+            # 만료/비활성 링크 접근 시도 → WARNING
+            logger.warning("Share access denied", extra={"event": "share", "share_id": share_link.id})
             return None
         
         # Get album

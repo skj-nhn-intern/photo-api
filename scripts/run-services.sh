@@ -1,29 +1,34 @@
-#!/usr/bin/env bash
-# photo-api 스택 systemctl 실행 스크립트 (인스턴스 내에서 사용)
-# 이미지에서는 서비스가 중지된 상태; 부팅 시 enable 되어 있으면 자동 기동됨.
-# 수동 제어: sudo /opt/photo-api/scripts/run-services.sh start|stop|restart|status
-set -euo pipefail
+#!/bin/bash
+#
+# build-image.sh 로 구성된 인스턴스에서 서비스를 기동하는 스크립트
+# 사용법: sudo ./scripts/run-services.sh
+#
+# 기동 서비스: photo-api, promtail, telegraf
 
-SERVICES="photo-api promtail telegraf"
+set -e
 
-case "${1:-status}" in
-  start)
-    systemctl start $SERVICES
-    echo "Started: $SERVICES"
-    ;;
-  stop)
-    systemctl stop $SERVICES
-    echo "Stopped: $SERVICES"
-    ;;
-  restart)
-    systemctl restart $SERVICES
-    echo "Restarted: $SERVICES"
-    ;;
-  status)
-    systemctl status $SERVICES --no-pager || true
-    ;;
-  *)
-    echo "Usage: $0 {start|stop|restart|status}" >&2
+if [ "$(id -u)" -ne 0 ]; then
+    echo "root 권한이 필요합니다. sudo $0 로 실행하세요."
     exit 1
-    ;;
-esac
+fi
+
+echo "=========================================="
+echo "인스턴스 서비스 기동"
+echo "=========================================="
+
+systemctl start photo-api
+echo "  photo-api started"
+
+systemctl start promtail
+echo "  promtail started"
+
+systemctl start telegraf
+echo "  telegraf started"
+
+echo ""
+echo "상태 확인:"
+systemctl is-active --quiet photo-api  && echo "  photo-api: active" || echo "  photo-api: failed"
+systemctl is-active --quiet promtail   && echo "  promtail:  active" || echo "  promtail:  failed"
+systemctl is-active --quiet telegraf  && echo "  telegraf:  active" || echo "  telegraf:  failed"
+echo ""
+echo "자세한 상태: systemctl status photo-api promtail telegraf"

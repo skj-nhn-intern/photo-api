@@ -5,17 +5,19 @@ Handles CDN URL generation with Auth Token authentication.
 Auth Token API 참고:
 https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-token-api
 """
+import logging
 import time
 from typing import Optional, List
 
 import httpx
 
 from app.config import get_settings
-from app.services.nhn_logger import log_error, log_exception
 from app.utils.prometheus_metrics import (
     external_request_errors_total,
     record_external_request,
 )
+
+logger = logging.getLogger("app.cdn")
 
 
 class NHNCDNService:
@@ -52,7 +54,7 @@ class NHNCDNService:
             생성된 토큰 문자열, 실패시 None
         """
         if not self.settings.nhn_cdn_app_key:
-            log_error("CDN Auth Token skipped", event="cdn", reason="app_key_not_set")
+            # App Key 미설정은 설정 오류가 아님 (CDN 미사용 환경)
             return None
         
         if duration_seconds is None:
@@ -91,17 +93,15 @@ class NHNCDNService:
                         token = data.get("authToken", {}).get("singlePathToken")
                         return token
                     else:
-                        log_error(
-                            "CDN Auth Token creation failed",
-                            event="cdn",
-                            status_code=response.status_code,
-                            path=path,
+                        logger.error(
+                            "CDN auth token failed",
+                            extra={"event": "cdn", "status": response.status_code},
                         )
                         external_request_errors_total.labels(service="nhn_cdn").inc()
                         return None
 
         except httpx.HTTPError as e:
-            log_exception("CDN Auth Token API call failed", e, event="cdn", path=path)
+            logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn"})
             external_request_errors_total.labels(service="nhn_cdn").inc()
             return None
     

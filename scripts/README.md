@@ -43,16 +43,13 @@ sudo ./scripts/build-image.sh
 
 **인스턴스 이미지와 systemctl**  
 이미지는 디스크 스냅샷이라 서비스는 **중지된 상태**로 들어갑니다. 빌드 시 `systemctl enable`만 해 두었기 때문에, 이 이미지에서 **인스턴스를 부팅하면** photo-api, promtail, telegraf가 **자동으로 기동**됩니다.  
-수동 제어가 필요하면 인스턴스 안에서 **systemctl 실행 스크립트**를 사용하세요:
+수동 기동이 필요하면 인스턴스 안에서 **실행 스크립트**를 사용하세요:
 
 ```bash
-sudo photo-api-run start    # 기동
-sudo photo-api-run stop     # 중지
-sudo photo-api-run restart  # 재시작
-sudo photo-api-run status   # 상태
+sudo photo-api-run
 ```
 
-(실제 경로: `/opt/photo-api/scripts/run-services.sh`)
+(실제 경로: `/opt/photo-api/scripts/run-services.sh` — photo-api, promtail, telegraf 전체 기동)
 
 이미지 생성 후 앱 설정(DB, Object Storage 등)을 위해 `/opt/photo-api/.env`를 배포 시점에 넣거나, user-data 등으로 주입하면 됩니다.
 

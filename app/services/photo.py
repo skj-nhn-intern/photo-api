@@ -1,6 +1,7 @@
 """
 Photo service for managing photos.
 """
+import logging
 from typing import List, Optional
 import uuid
 
@@ -12,7 +13,8 @@ from app.models.user import User
 from app.schemas.photo import PhotoCreate, PhotoUpdate, PhotoWithUrl
 from app.services.nhn_object_storage import get_storage_service
 from app.services.nhn_cdn import get_cdn_service
-from app.services.nhn_logger import log_info, log_error, log_exception
+
+logger = logging.getLogger("app.photo")
 
 
 class PhotoService:
@@ -62,7 +64,11 @@ class PhotoService:
                 content_type=content_type,
             )
         except Exception as e:
-            log_exception("Photo upload failed", e, event="photo", user_id=user.id, storage_path=storage_path)
+            logger.error(
+                "Photo upload failed",
+                exc_info=e,
+                extra={"event": "photo", "user_id": user.id, "path": storage_path},
+            )
             raise ValueError("사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.")
         
         photo = Photo(
@@ -79,7 +85,8 @@ class PhotoService:
         self.db.add(photo)
         await self.db.flush()
         await self.db.refresh(photo)
-        log_info("Photo uploaded", event="photo", photo_id=photo.id, user_id=user.id)
+        # 업로드 성공은 INFO (중요 비즈니스 이벤트)
+        logger.info("Photo uploaded", extra={"event": "photo", "photo_id": photo.id, "user_id": user.id})
         return photo
     
     async def get_photo_by_id(
@@ -168,10 +175,15 @@ class PhotoService:
         try:
             await self.storage.delete_file(photo.storage_path)
         except Exception as e:
-            log_exception("Photo storage delete failed", e, event="photo", photo_id=photo.id, storage_path=photo.storage_path)
+            # 스토리지 삭제 실패해도 DB에서는 삭제 (고아 파일 허용)
+            logger.error(
+                "Photo storage delete failed",
+                exc_info=e,
+                extra={"event": "photo", "photo_id": photo.id},
+            )
         await self.db.delete(photo)
         await self.db.flush()
-        log_info("Photo deleted", event="photo", photo_id=photo.id)
+        # 삭제 성공은 로깅 안 함 (운영 노이즈 최소화)
         return True
     
     async def download_photo(self, photo: Photo) -> bytes:
@@ -187,7 +199,11 @@ class PhotoService:
         try:
             return await self.storage.download_file(photo.storage_path)
         except Exception as e:
-            log_exception("Photo download failed", e, event="photo", photo_id=photo.id, storage_path=photo.storage_path)
+            logger.error(
+                "Photo download failed",
+                exc_info=e,
+                extra={"event": "photo", "photo_id": photo.id},
+            )
             raise ValueError("사진 다운로드에 실패했습니다.")
     
     async def get_photo_with_url(self, photo: Photo) -> PhotoWithUrl:

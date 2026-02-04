@@ -1,8 +1,11 @@
 """
 NHN Cloud Log & Crash service integration.
-Provides async logging that doesn't block the main application.
-Uses a background queue to batch log messages for efficiency.
-동시에 Python 표준 로거로도 전달해 파일/스토드아웃(Promtail→Loki)에 동일 이벤트 기록.
+
+역할: NHN Cloud Log & Crash로 로그를 비동기 전송
+참고: 로컬 로깅(파일/stdout)은 Python 표준 로거(logger.py)가 처리
+
+운영 로깅은 Python 표준 로거를 직접 사용하고,
+NHN Cloud 전송이 필요한 경우에만 이 서비스를 사용.
 """
 import asyncio
 import json
@@ -33,16 +36,22 @@ class LogLevel(str, Enum):
     FATAL = "FATAL"
 
 
+# 로깅에서 제외할 개인정보 필드
+_SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret"})
+
+
 class NHNLoggerService:
     """
-    Async logger service for NHN Cloud Log & Crash.
+    NHN Cloud Log & Crash 전송 서비스.
     
-    Features:
-    - Non-blocking async logging
-    - Background queue processing
-    - Automatic batching of log messages
-    - Retry mechanism for failed sends
-    - Memory-safe with queue size limits
+    특징:
+    - 비동기 큐 기반 전송 (논블로킹)
+    - 배치 처리로 효율성 확보
+    - 실패 시 재시도
+    - 큐 크기 제한으로 메모리 안전
+    
+    주의: 로컬 로깅(파일/stdout)은 Python 표준 로거가 처리.
+    이 서비스는 NHN Cloud 전송만 담당.
     """
     
     MAX_QUEUE_SIZE = 10000
@@ -57,6 +66,7 @@ class NHNLoggerService:
         self._task: Optional[asyncio.Task] = None
         self._hostname = socket.gethostname()
         self._platform = platform.system()
+        self._logger = logging.getLogger("app.nhn_logger")
     
     def queue_size(self) -> int:
         """Current log queue length (for Prometheus / backpressure monitoring)."""
@@ -75,7 +85,6 @@ class NHNLoggerService:
         self._running = False
         
         if self._task:
-            # Give time to flush remaining logs
             await self._flush_all()
             self._task.cancel()
             try:
@@ -83,6 +92,10 @@ class NHNLoggerService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+    
+    def _filter_sensitive(self, data: dict) -> dict:
+        """개인정보 필드 제거."""
+        return {k: v for k, v in data.items() if k not in _SENSITIVE_FIELDS}
     
     def _create_log_body(
         self,
@@ -104,62 +117,43 @@ class NHNLoggerService:
             "sendTime": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         }
         
-        # Add extra fields
+        # 개인정보 제거 후 추가 필드 포함
         if extra:
-            body["customFields"] = json.dumps(extra)
+            filtered = self._filter_sensitive(extra)
+            if filtered:
+                body["customFields"] = json.dumps(filtered)
         
         return body
     
-    def log(
-        self,
-        level: LogLevel,
-        message: str,
-        **extra: Any,
-    ) -> None:
-        """
-        Add a log message to the queue and to Python logger (file/stdout).
-        Non-blocking; one event for NHN Cloud and local logs.
-        """
+    def _enqueue(self, level: LogLevel, message: str, **extra: Any) -> None:
+        """NHN Cloud 큐에 로그 추가 (로컬 로깅 없음)."""
         log_body = self._create_log_body(level, message, **extra)
         self._queue.append(log_body)
-
-        # 동일 이벤트를 파일/스토드아웃에도 기록 (Promtail→Loki, 장애 대응용)
-        _LEVEL_MAP = {
-            LogLevel.DEBUG: logging.DEBUG,
-            LogLevel.INFO: logging.INFO,
-            LogLevel.WARN: logging.WARNING,
-            LogLevel.ERROR: logging.ERROR,
-            LogLevel.FATAL: logging.CRITICAL,
-        }
-        py_level = _LEVEL_MAP.get(level, logging.INFO)
-        std_logger = logging.getLogger("app")
-        std_logger.log(py_level, message, extra=extra)
     
     def debug(self, message: str, **extra: Any) -> None:
-        """Log a debug message."""
-        self.log(LogLevel.DEBUG, message, **extra)
+        """NHN Cloud에 DEBUG 로그 전송."""
+        self._enqueue(LogLevel.DEBUG, message, **extra)
     
     def info(self, message: str, **extra: Any) -> None:
-        """Log an info message."""
-        self.log(LogLevel.INFO, message, **extra)
+        """NHN Cloud에 INFO 로그 전송."""
+        self._enqueue(LogLevel.INFO, message, **extra)
     
     def warn(self, message: str, **extra: Any) -> None:
-        """Log a warning message."""
-        self.log(LogLevel.WARN, message, **extra)
+        """NHN Cloud에 WARN 로그 전송."""
+        self._enqueue(LogLevel.WARN, message, **extra)
     
     def error(self, message: str, **extra: Any) -> None:
-        """Log an error message."""
-        self.log(LogLevel.ERROR, message, **extra)
+        """NHN Cloud에 ERROR 로그 전송."""
+        self._enqueue(LogLevel.ERROR, message, **extra)
     
     def fatal(self, message: str, **extra: Any) -> None:
-        """Log a fatal message."""
-        self.log(LogLevel.FATAL, message, **extra)
+        """NHN Cloud에 FATAL 로그 전송."""
+        self._enqueue(LogLevel.FATAL, message, **extra)
     
     def exception(self, message: str, exc: Exception, **extra: Any) -> None:
-        """Log an exception with traceback (NHN + Python logger)."""
+        """NHN Cloud에 예외 로그 전송 (traceback 포함)."""
         tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
         extra["exception_type"] = type(exc).__name__
-        extra["exception_message"] = str(exc)
         extra["traceback"] = "".join(tb)
         self.error(message, **extra)
     
@@ -259,29 +253,3 @@ def get_logger_service() -> NHNLoggerService:
     if _logger_service is None:
         _logger_service = NHNLoggerService()
     return _logger_service
-
-
-# Convenience functions for direct logging
-def log_debug(message: str, **extra: Any) -> None:
-    """Log a debug message."""
-    get_logger_service().debug(message, **extra)
-
-
-def log_info(message: str, **extra: Any) -> None:
-    """Log an info message."""
-    get_logger_service().info(message, **extra)
-
-
-def log_warn(message: str, **extra: Any) -> None:
-    """Log a warning message."""
-    get_logger_service().warn(message, **extra)
-
-
-def log_error(message: str, **extra: Any) -> None:
-    """Log an error message."""
-    get_logger_service().error(message, **extra)
-
-
-def log_exception(message: str, exc: Exception, **extra: Any) -> None:
-    """Log an exception with traceback."""
-    get_logger_service().exception(message, exc, **extra)

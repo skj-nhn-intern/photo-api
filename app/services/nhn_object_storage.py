@@ -5,14 +5,16 @@ Handles file upload, download, and deletion from Object Storage.
 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/api-guide/
 """
 import asyncio
+import logging
 from typing import Optional
 from datetime import datetime, timedelta
 
 import httpx
 
 from app.config import get_settings
-from app.services.nhn_logger import log_info, log_error, log_exception
 from app.utils.prometheus_metrics import record_external_request
+
+logger = logging.getLogger("app.storage")
 
 
 class NHNObjectStorageService:
@@ -109,16 +111,11 @@ class NHNObjectStorageService:
                     # 응답 본문 파싱
                     try:
                         data = response.json()
-                    except Exception as json_err:
-                        log_error(
-                            "IAM response parse failed",
-                            event="storage_auth",
-                            status_code=status_code,
-                            error=str(json_err),
-                        )
+                    except Exception:
+                        logger.error("IAM response parse failed", extra={"event": "storage", "status": status_code})
                         raise Exception("IAM 인증 응답을 파싱할 수 없습니다.")
                     
-                    # 상태 코드가 200이 아니면 에러 처리 (한 줄 로그만)
+                    # 상태 코드가 200이 아니면 에러 처리
                     if status_code != 200:
                         error_message = "IAM 인증에 실패했습니다."
                         try:
@@ -126,22 +123,12 @@ class NHNObjectStorageService:
                             if isinstance(error_detail, dict):
                                 error_msg = error_detail.get("message", "")
                                 if "Could not find" in error_msg or "tenant" in error_msg.lower():
-                                    error_message = f"IAM 인증 실패: Tenant ID '{tenant_id}'를 찾을 수 없습니다."
+                                    error_message = f"IAM 인증 실패: Tenant ID를 찾을 수 없습니다."
                                 elif "Unauthorized" in error_msg or status_code == 401:
-                                    error_message = "IAM 인증 실패: 인증 정보가 올바르지 않거나 권한이 없습니다."
-                            log_error(
-                                "IAM authentication failed",
-                                event="storage_auth",
-                                status_code=status_code,
-                                tenant_id=tenant_id,
-                            )
+                                    error_message = "IAM 인증 실패: 인증 정보가 올바르지 않습니다."
                         except Exception:
-                            log_error(
-                                "IAM authentication failed",
-                                event="storage_auth",
-                                status_code=status_code,
-                                tenant_id=tenant_id,
-                            )
+                            pass
+                        logger.error("IAM auth failed", extra={"event": "storage", "status": status_code})
                         raise Exception(error_message)
                     
                     # Keystone v2 API 응답 형식
@@ -152,7 +139,7 @@ class NHNObjectStorageService:
                     # 토큰 ID 추출
                     self._token = token_data.get("id")
                     if not self._token:
-                        log_error("IAM token not found", event="storage_auth")
+                        logger.error("IAM token not found", extra={"event": "storage"})
                         raise Exception("IAM 토큰을 받을 수 없습니다.")
                     
                     # 토큰 만료 시간 추출
@@ -176,25 +163,25 @@ class NHNObjectStorageService:
                         tenant_id_from_response = tenant_id
                     
                     if not tenant_id_from_response:
-                        log_error("IAM tenant ID not found", event="storage_auth")
+                        logger.error("IAM tenant ID not found", extra={"event": "storage"})
                         raise Exception("Tenant ID를 찾을 수 없습니다. NHN_STORAGE_TENANT_ID를 설정하세요.")
                     
                     self._account = f"AUTH_{tenant_id_from_response}"
                     self._storage_url = self.settings.nhn_storage_url
-                    log_info("Storage auth OK", event="storage_auth", account=self._account)
+                    # 토큰 갱신 성공은 로깅 안 함 (정상 동작)
                     return self._token
                     
             except httpx.HTTPStatusError as e:
-                log_exception("Storage auth HTTP error", e, event="storage_auth")
+                logger.error("Storage auth HTTP error", exc_info=e, extra={"event": "storage"})
                 raise Exception("IAM 인증에 실패했습니다.")
             except httpx.HTTPError as e:
-                log_exception("Storage auth HTTP error", e, event="storage_auth")
+                logger.error("Storage auth network error", exc_info=e, extra={"event": "storage"})
                 raise Exception("IAM 인증 중 네트워크 오류가 발생했습니다.")
             except Exception as e:
                 error_msg = str(e)
-                log_exception("Storage auth failed", e, event="storage_auth")
-                if "IAM 인증" in error_msg or "Storage authentication failed" in error_msg or "네트워크 오류" in error_msg:
+                if "IAM" in error_msg or "네트워크" in error_msg:
                     raise
+                logger.error("Storage auth failed", exc_info=e, extra={"event": "storage"})
                 raise Exception(f"Storage authentication failed: {error_msg}")
     
     def _get_storage_url(self) -> str:
@@ -238,22 +225,18 @@ class NHNObjectStorageService:
                             headers={"X-Auth-Token": token},
                         )
                         if create_response.status_code not in (201, 202):
-                            log_error(
+                            logger.error(
                                 "Container create failed",
-                                event="storage",
-                                container=container_name,
-                                status_code=create_response.status_code,
+                                extra={"event": "storage", "container": container_name, "status": create_response.status_code},
                             )
                     elif response.status_code not in (200, 204):
-                        log_error(
+                        logger.error(
                             "Container check failed",
-                            event="storage",
-                            container=container_name,
-                            status_code=response.status_code,
+                            extra={"event": "storage", "container": container_name, "status": response.status_code},
                         )
 
         except Exception as e:
-            log_exception("Container ensure failed", e, event="storage", container=container_name)
+            logger.error("Container ensure failed", exc_info=e, extra={"event": "storage", "container": container_name})
     
     async def upload_file(
         self,
@@ -299,25 +282,25 @@ class NHNObjectStorageService:
                     )
 
                     if response.status_code not in (200, 201):
-                        log_error(
+                        logger.error(
                             "File upload failed",
-                            event="storage",
-                            status_code=response.status_code,
-                            object_name=object_name,
+                            extra={"event": "storage", "status": response.status_code, "object": object_name},
                         )
                         raise Exception("File upload failed")
 
-                    # 반환 형식: container/object_name
+                    # 반환 형식: container/object_name (업로드 성공은 로깅 안 함)
                     return f"{container}/{object_name}"
 
         except httpx.TimeoutException:
-            log_error("File upload timeout", event="storage", object_name=object_name)
+            logger.error("File upload timeout", extra={"event": "storage", "object": object_name})
             raise Exception("File upload timeout")
         except httpx.HTTPError as e:
-            log_exception("File upload HTTP error", e, event="storage", object_name=object_name)
+            logger.error("File upload HTTP error", exc_info=e, extra={"event": "storage", "object": object_name})
             raise Exception("File upload failed")
         except Exception as e:
-            log_exception("File upload failed", e, event="storage", object_name=object_name)
+            if "File upload" in str(e):
+                raise
+            logger.error("File upload failed", exc_info=e, extra={"event": "storage", "object": object_name})
             raise Exception("File upload failed")
     
     async def download_file(self, object_name: str) -> bytes:
@@ -356,23 +339,23 @@ class NHNObjectStorageService:
                     )
 
                     if response.status_code != 200:
-                        log_error(
+                        logger.error(
                             "File download failed",
-                            event="storage",
-                            status_code=response.status_code,
-                            object_name=object_name,
+                            extra={"event": "storage", "status": response.status_code, "object": object_name},
                         )
                         raise Exception(f"File download failed: HTTP {response.status_code}")
                     return response.content
 
         except httpx.TimeoutException:
-            log_error("File download timeout", event="storage", object_name=object_name)
+            logger.error("File download timeout", extra={"event": "storage", "object": object_name})
             raise Exception("File download timeout")
         except httpx.HTTPError as e:
-            log_exception("File download HTTP error", e, event="storage", object_name=object_name)
+            logger.error("File download HTTP error", exc_info=e, extra={"event": "storage", "object": object_name})
             raise Exception(f"File download failed: {str(e)}")
         except Exception as e:
-            log_exception("File download failed", e, event="storage", object_name=object_name)
+            if "File download" in str(e):
+                raise
+            logger.error("File download failed", exc_info=e, extra={"event": "storage", "object": object_name})
             raise
     
     async def delete_file(self, object_name: str) -> bool:
@@ -409,22 +392,20 @@ class NHNObjectStorageService:
 
                     success = response.status_code in (204, 404)
                     if not success:
-                        log_error(
+                        logger.error(
                             "File deletion failed",
-                            event="storage",
-                            status_code=response.status_code,
-                            object_name=object_name,
+                            extra={"event": "storage", "status": response.status_code, "object": object_name},
                         )
                     return success
 
         except httpx.TimeoutException:
-            log_error("File deletion timeout", event="storage", object_name=object_name)
+            logger.error("File deletion timeout", extra={"event": "storage", "object": object_name})
             return False
         except httpx.HTTPError as e:
-            log_exception("File deletion failed", e, event="storage", object_name=object_name)
+            logger.error("File deletion failed", exc_info=e, extra={"event": "storage", "object": object_name})
             return False
         except Exception as e:
-            log_exception("File deletion failed", e, event="storage", object_name=object_name)
+            logger.error("File deletion failed", exc_info=e, extra={"event": "storage", "object": object_name})
             return False
     
     async def file_exists(self, object_name: str) -> bool:
@@ -463,7 +444,7 @@ class NHNObjectStorageService:
                     return response.status_code == 200
 
         except Exception as e:
-            log_exception("File exists check failed", e, event="storage", object_name=object_name)
+            logger.error("File exists check failed", exc_info=e, extra={"event": "storage", "object": object_name})
             return False
 
 
