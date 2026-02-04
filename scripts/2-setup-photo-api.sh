@@ -41,9 +41,13 @@ id -u photo-api &>/dev/null || useradd -r -s /usr/sbin/nologin -d "$SERVICE_HOME
 chown -R photo-api:photo-api "$SERVICE_HOME" /var/log/photo-api 2>/dev/null || chown -R root:root "$SERVICE_HOME" /var/log/photo-api
 
 echo "[4/6] Python 가상환경 및 의존성 설치..."
-"${PYTHON3_11:-python3.11}" -m venv "$SERVICE_HOME/venv"
-"$SERVICE_HOME/venv/bin/pip" install --upgrade pip -q
-"$SERVICE_HOME/venv/bin/pip" install -r "$SERVICE_HOME/requirements.txt" -q
+if [[ -x "$SERVICE_HOME/venv/bin/uvicorn" ]]; then
+  echo "  venv 이미 존재(uvicorn 있음), pip 설치 생략"
+else
+  "${PYTHON3_11:-python3.11}" -m venv "$SERVICE_HOME/venv"
+  "$SERVICE_HOME/venv/bin/pip" install --upgrade pip -q
+  "$SERVICE_HOME/venv/bin/pip" install -r "$SERVICE_HOME/requirements.txt" -q
+fi
 
 echo "[5/6] systemd 서비스 유닛 설치..."
 cat > /etc/systemd/system/photo-api.service << 'SVC'

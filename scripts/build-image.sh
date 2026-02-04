@@ -49,9 +49,6 @@ INSTANCE_IP="${INSTANCE_IP:-127.0.0.1}"
 cd "$SCRIPT_DIR"
 chmod +x 1-install-python.sh 2-setup-photo-api.sh 3-setup-promtail.sh 4-setup-telegraf.sh run-services.sh 2>/dev/null || true
 
-echo "=== 1/4 Python 3.11 설치 ==="
-bash "$SCRIPT_DIR/1-install-python.sh"
-
 echo "=== 2/4 photo-api systemd 패키징 ==="
 bash "$SCRIPT_DIR/2-setup-photo-api.sh"
 

@@ -21,6 +21,7 @@ import logging
 import socket
 import sys
 import uuid
+from datetime import timezone
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from typing import Optional
@@ -120,8 +121,16 @@ class JsonLinesFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        # UTC ISO8601 (Loki/Promtail 파싱용, 타임존 오차 방지)
+        from datetime import datetime
+        dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        try:
+            msecs = int(getattr(record, "msecs", 0) or 0) % 1000
+        except (TypeError, ValueError):
+            msecs = 0
+        ts_utc = dt.strftime("%Y-%m-%dT%H:%M:%S") + f".{msecs:03d}Z"
         payload = {
-            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "ts": ts_utc,
             "level": record.levelname,
             "instance": INSTANCE_IP,
         }
