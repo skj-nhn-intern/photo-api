@@ -2,7 +2,7 @@
 # Ubuntu 인스턴스 이미지 빌드 4단계: Telegraf 설치 및 구성
 # 설정: /opt/telegraf/telegraf.conf (conf/telegraf.conf 기반)
 # 사용: sudo TELEGRAF_VERSION=1.37.1 ./scripts/4-setup-telegraf.sh
-# 환경변수: INFLUX_URL, INFLUX_TOKEN (설정 파일 내 InfluxDB 주소/토큰 덮어쓰기)
+# 환경변수: INFLUX_URL, INFLUX_TOKEN (설정 파일 내 InfluxDB 주소/토큰 덮어쓰기)!
 set -euo pipefail
 
 TELEGRAF_VERSION="${TELEGRAF_VERSION:-1.37.1}"
