@@ -1,6 +1,6 @@
 # Promtail Configuration for Photo API
-# 환경변수: LOKI_URL, INSTANCE_IP (systemd EnvironmentFile=/etc/default/photo-api 에서 로드)
-# 실행: promtail -config.file=... -config.expand-env=true
+# LOKI_URL = Loki 베이스 URL만 (예: http://192.168.4.73:3100, 끝에 / 및 경로 없음). /loki/api/v1/push 는 자동 추가됨.
+# INSTANCE_IP = 인스턴스 식별용 (선택). systemd EnvironmentFile=/etc/default/photo-api 또는 wrapper에서 로드.
 
 server:
   http_listen_port: 9080

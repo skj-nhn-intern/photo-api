@@ -44,23 +44,12 @@ cp "$TELEGRAF_BIN" "$TELEGRAF_HOME/telegraf"
 rm -rf /tmp/telegraf-*
 chmod +x "$TELEGRAF_HOME/telegraf"
 
-echo "[3/4] 설정 파일·wrapper 복사..."
+echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$TELEGRAF_HOME/telegraf.conf"
-# wrapper: /etc/default/photo-api를 source한 뒤 telegraf 실행 (환경변수 확실히 전달)
-cat > "$TELEGRAF_HOME/run-telegraf.sh" << 'WRAPPER'
-#!/usr/bin/env bash
-set -e
-if [[ -f /etc/default/photo-api ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source /etc/default/photo-api
-  set +a
-fi
-exec /opt/telegraf/telegraf --config /opt/telegraf/telegraf.conf "$@"
-WRAPPER
-chmod +x "$TELEGRAF_HOME/run-telegraf.sh"
 
 echo "[4/4] systemd 서비스 설치..."
+# Telegraf는 설정 파일의 ${INFLUX_URL}, ${INFLUX_TOKEN} 등을 프로세스 환경에서 치환함.
+# EnvironmentFile: /etc/environment (시스템 전역) + /etc/default/photo-api (서비스 전용, 선택)
 cat > /etc/systemd/system/telegraf.service << 'EOF'
 [Unit]
 Description=Telegraf
@@ -69,7 +58,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/telegraf/run-telegraf.sh
+EnvironmentFile=-/etc/environment
+EnvironmentFile=-/etc/default/photo-api
+ExecStart=/opt/telegraf/telegraf --config /opt/telegraf/telegraf.conf
 Restart=on-failure
 RestartSec=5
 
