@@ -137,11 +137,11 @@ class JsonLinesFormatter(logging.Formatter):
         
         payload["msg"] = record.getMessage()
         
-        # 추가 컨텍스트 (개인정보 제외)
+        # 추가 컨텍스트 (상위 필드·개인정보 제외)
+        _skip_in_ctx = _STANDARD_ATTRS | {"event", "instance"}  # 상위에 이미 있음
         extra_ctx = {
             k: v for k, v in record.__dict__.items()
-            if k not in _STANDARD_ATTRS 
-            and k != "event" 
+            if k not in _skip_in_ctx
             and k not in _SENSITIVE_FIELDS
             and v is not None
         }

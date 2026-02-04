@@ -22,7 +22,7 @@ from app.database import init_db, close_db
 from app.routers import auth_router, photos_router, albums_router, share_router
 from app.utils.prometheus_metrics import exceptions_total, ready, setup_prometheus
 from app.services.nhn_logger import get_logger_service
-from app.utils.logger import setup_logging, set_request_id, get_request_id, INSTANCE_IP
+from app.utils.logger import setup_logging, set_request_id, get_request_id
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -37,12 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     ready.set(1)
     logger.info(
         "Startup",
-        extra={
-            "event": "lifecycle",
-            "version": settings.app_version,
-            "instance": INSTANCE_IP,
-            "environment": settings.environment.value,
-        },
+        extra={"event": "lifecycle", "version": settings.app_version},
     )
     await init_db()
     logger_service = get_logger_service()
@@ -51,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
 
     ready.set(0)
-    logger.info("Shutdown", extra={"event": "lifecycle", "instance": INSTANCE_IP})
+    logger.info("Shutdown", extra={"event": "lifecycle"})
     await logger_service.stop()
     await close_db()
 
