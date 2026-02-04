@@ -7,10 +7,6 @@ PROMTAIL_VERSION="${PROMTAIL_VERSION:-3.6.4}"
 PROMTAIL_HOME="/opt/promtail"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 인스턴스 IP: 환경변수 없으면 hostname -I 첫 번째 값
-INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
-INSTANCE_IP="${INSTANCE_IP:-127.0.0.1}"
-
 # 설정 파일 찾기
 CONF_SOURCE=""
 for cand in "$SCRIPT_DIR/../conf/promtail-config.yaml" "/opt/photo-api/conf/promtail-config.yaml"; do
@@ -25,7 +21,6 @@ if [[ -z "$CONF_SOURCE" ]]; then
 fi
 
 echo "PROMTAIL_VERSION=$PROMTAIL_VERSION"
-echo "INSTANCE_IP=$INSTANCE_IP"
 echo "CONF_SOURCE=$CONF_SOURCE"
 
 echo "[1/4] 디렉터리 생성..."
@@ -45,14 +40,8 @@ chmod +x "$PROMTAIL_HOME/promtail"
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
 
-echo "[4/4] 환경변수 파일 및 systemd 서비스 설치..."
-# 시스템 환경변수 (Promtail 실행 시 여기서 로드)
-LOKI_URL="${LOKI_URL:-http://192.168.4.73:3100}"
-cat > /etc/default/promtail << EOF
-LOKI_URL=$LOKI_URL
-INSTANCE_IP=$INSTANCE_IP
-EOF
-
+echo "[4/4] systemd 서비스 설치..."
+# LOKI_URL, INSTANCE_IP 등은 /etc/default/photo-api 등 이미 export된 환경에서 로드
 cat > /etc/systemd/system/promtail.service << 'EOF'
 [Unit]
 Description=Promtail
@@ -61,7 +50,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/promtail
+EnvironmentFile=-/etc/default/photo-api
 ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
 Restart=on-failure
 RestartSec=5

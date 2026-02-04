@@ -47,19 +47,8 @@ chmod +x "$TELEGRAF_HOME/telegraf"
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$TELEGRAF_HOME/telegraf.conf"
 
-echo "[4/4] 환경변수 파일 및 systemd 서비스 설치..."
-# 시스템 환경변수 (Telegraf 실행 시 여기서 로드)
-INFLUX_URL="${INFLUX_URL:-http://192.168.4.73:8086}"
-INFLUX_TOKEN="${INFLUX_TOKEN:-}"
-INFLUX_ORG="${INFLUX_ORG:-nhn-cloud}"
-INFLUX_BUCKET="${INFLUX_BUCKET:-monitoring}"
-cat > /etc/default/telegraf << EOF
-INFLUX_URL=$INFLUX_URL
-INFLUX_TOKEN=$INFLUX_TOKEN
-INFLUX_ORG=$INFLUX_ORG
-INFLUX_BUCKET=$INFLUX_BUCKET
-EOF
-
+echo "[4/4] systemd 서비스 설치..."
+# INFLUX_URL, INFLUX_TOKEN, INSTANCE_IP 등은 /etc/default/photo-api 등 이미 export된 환경에서 로드
 cat > /etc/systemd/system/telegraf.service << 'EOF'
 [Unit]
 Description=Telegraf
@@ -68,7 +57,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/telegraf
+EnvironmentFile=-/etc/default/photo-api
 ExecStart=/opt/telegraf/telegraf --config /opt/telegraf/telegraf.conf
 Restart=on-failure
 RestartSec=5
