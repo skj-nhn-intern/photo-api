@@ -37,11 +37,23 @@ rm -f /tmp/promtail.zip
 [[ -f "$PROMTAIL_HOME/promtail-linux-amd64" ]] && mv "$PROMTAIL_HOME/promtail-linux-amd64" "$PROMTAIL_HOME/promtail"
 chmod +x "$PROMTAIL_HOME/promtail"
 
-echo "[3/4] 설정 파일 복사..."
+echo "[3/4] 설정 파일·wrapper 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
+# wrapper: /etc/default/photo-api를 source한 뒤 promtail 실행 (환경변수 확실히 전달)
+cat > "$PROMTAIL_HOME/run-promtail.sh" << 'WRAPPER'
+#!/usr/bin/env bash
+set -e
+if [[ -f /etc/default/photo-api ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source /etc/default/photo-api
+  set +a
+fi
+exec /opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true "$@"
+WRAPPER
+chmod +x "$PROMTAIL_HOME/run-promtail.sh"
 
 echo "[4/4] systemd 서비스 설치..."
-# LOKI_URL, INSTANCE_IP 등은 /etc/default/photo-api 등 이미 export된 환경에서 로드
 cat > /etc/systemd/system/promtail.service << 'EOF'
 [Unit]
 Description=Promtail
@@ -50,8 +62,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/default/photo-api
-ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
+ExecStart=/opt/promtail/run-promtail.sh
 Restart=on-failure
 RestartSec=5
 
