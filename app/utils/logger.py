@@ -10,12 +10,20 @@
 로그 출력:
 - stdout: 사람이 읽기 쉬운 텍스트 (journald)
 - /var/log/photo-api/*.log: NDJSON (Promtail → Loki)
+
+장애 대응:
+- Request ID: 요청 추적을 위한 고유 식별자
+- Instance IP: 멀티 인스턴스 환경에서 출처 식별
 """
+import contextvars
 import json
 import logging
+import socket
 import sys
+import uuid
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from typing import Optional
 
 from app.config import get_settings
 
@@ -26,6 +34,42 @@ LOG_DIR = Path("/var/log/photo-api")
 
 # 로깅에서 제외할 개인정보 필드
 _SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret"})
+
+# Request ID를 저장하는 context variable (비동기 안전)
+request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_id", default=None
+)
+
+
+def _get_instance_ip() -> str:
+    """인스턴스 IP 반환 (hostname 대신). 실패 시 hostname 사용."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return socket.gethostname()
+
+
+# 인스턴스 IP (한 번만 계산)
+INSTANCE_IP = _get_instance_ip()
+
+
+def generate_request_id() -> str:
+    """새 Request ID 생성. 짧고 읽기 쉬운 형식."""
+    return uuid.uuid4().hex[:12]
+
+
+def get_request_id() -> Optional[str]:
+    """현재 Request ID 반환."""
+    return request_id_var.get()
+
+
+def set_request_id(request_id: Optional[str] = None) -> str:
+    """Request ID 설정. None이면 새로 생성."""
+    rid = request_id or generate_request_id()
+    request_id_var.set(rid)
+    return rid
 
 
 class FlushingRotatingFileHandler(RotatingFileHandler):
@@ -55,6 +99,8 @@ class JsonLinesFormatter(logging.Formatter):
     출력 필드:
     - ts: 타임스탬프
     - level: 로그 레벨
+    - instance: 인스턴스 IP (멀티 인스턴스 식별)
+    - rid: Request ID (요청 추적)
     - event: 이벤트 타입 (lifecycle, request, auth, photo, share, storage, cdn)
     - msg: 메시지
     - ctx: 추가 컨텍스트 (개인정보 제외)
@@ -65,7 +111,13 @@ class JsonLinesFormatter(logging.Formatter):
         payload = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level": record.levelname,
+            "instance": INSTANCE_IP,
         }
+        
+        # Request ID (있으면 포함)
+        rid = get_request_id()
+        if rid:
+            payload["rid"] = rid
         
         # event 필드 우선 배치
         if getattr(record, "event", None):
