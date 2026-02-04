@@ -69,7 +69,7 @@ StandardError=journal
 SyslogIdentifier=promtail
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.targetz
 SVC
 
 echo "[5/5] systemd 리로드 및 서비스 활성화..."
