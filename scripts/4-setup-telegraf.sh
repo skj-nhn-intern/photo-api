@@ -26,22 +26,26 @@ echo "CONF_SOURCE=$CONF_SOURCE"
 echo "[1/4] 디렉터리 생성..."
 mkdir -p "$TELEGRAF_HOME"
 
-echo "[2/4] Telegraf 다운로드..."
-curl -sSL -o /tmp/telegraf.tar.gz \
-  "https://dl.influxdata.com/telegraf/releases/telegraf-${TELEGRAF_VERSION}_linux_amd64.tar.gz"
-tar -xzf /tmp/telegraf.tar.gz -C /tmp
-rm -f /tmp/telegraf.tar.gz
+if [[ -x "$TELEGRAF_HOME/telegraf" ]]; then
+  echo "[2/4] Telegraf 이미 존재, 다운로드 생략"
+else
+  echo "[2/4] Telegraf 다운로드..."
+  curl -sSL -o /tmp/telegraf.tar.gz \
+    "https://dl.influxdata.com/telegraf/releases/telegraf-${TELEGRAF_VERSION}_linux_amd64.tar.gz"
+  tar -xzf /tmp/telegraf.tar.gz -C /tmp
+  rm -f /tmp/telegraf.tar.gz
 
-TELEGRAF_BIN="$(find /tmp -maxdepth 4 -type f -name telegraf 2>/dev/null | head -1)"
-if [[ -z "$TELEGRAF_BIN" ]]; then
-  echo "오류: telegraf 바이너리를 찾을 수 없습니다." >&2
-  exit 1
+  TELEGRAF_BIN="$(find /tmp -maxdepth 4 -type f -name telegraf 2>/dev/null | head -1)"
+  if [[ -z "$TELEGRAF_BIN" ]]; then
+    echo "오류: telegraf 바이너리를 찾을 수 없습니다." >&2
+    exit 1
+  fi
+
+  cp "$TELEGRAF_BIN" "$TELEGRAF_HOME/telegraf"
+  rm -rf /tmp/telegraf-*
+  chmod +x "$TELEGRAF_HOME/telegraf"
 fi
-
 systemctl is-active --quiet telegraf.service 2>/dev/null && systemctl stop telegraf.service || true
-cp "$TELEGRAF_BIN" "$TELEGRAF_HOME/telegraf"
-rm -rf /tmp/telegraf-*
-chmod +x "$TELEGRAF_HOME/telegraf"
 
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$TELEGRAF_HOME/telegraf.conf"

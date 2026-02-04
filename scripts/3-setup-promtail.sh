@@ -29,13 +29,17 @@ mkdir -p /var/lib/promtail
 mkdir -p /var/log/photo-api
 chmod 755 /var/log/photo-api
 
-echo "[2/4] Promtail 다운로드..."
-curl -sSL -o /tmp/promtail.zip \
-  "https://github.com/grafana/loki/releases/download/v${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
-unzip -o -q /tmp/promtail.zip -d "$PROMTAIL_HOME"
-rm -f /tmp/promtail.zip
-[[ -f "$PROMTAIL_HOME/promtail-linux-amd64" ]] && mv "$PROMTAIL_HOME/promtail-linux-amd64" "$PROMTAIL_HOME/promtail"
-chmod +x "$PROMTAIL_HOME/promtail"
+if [[ -x "$PROMTAIL_HOME/promtail" ]]; then
+  echo "[2/4] Promtail 이미 존재, 다운로드 생략"
+else
+  echo "[2/4] Promtail 다운로드..."
+  curl -sSL -o /tmp/promtail.zip \
+    "https://github.com/grafana/loki/releases/download/v${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+  unzip -o -q /tmp/promtail.zip -d "$PROMTAIL_HOME"
+  rm -f /tmp/promtail.zip
+  [[ -f "$PROMTAIL_HOME/promtail-linux-amd64" ]] && mv "$PROMTAIL_HOME/promtail-linux-amd64" "$PROMTAIL_HOME/promtail"
+  chmod +x "$PROMTAIL_HOME/promtail"
+fi
 
 echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
