@@ -41,13 +41,26 @@ _SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret
 
 
 def _get_primary_ip() -> str:
-    """기본 라우트용 네트워크 인터페이스 IP를 반환. 실패 시 hostname 반환."""
+    """사설 IP 반환 (ip addr에서 추출). 실패 시 hostname 반환."""
+    import subprocess
+    import re
+    
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            for match in re.finditer(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result.stdout):
+                ip = match.group(1)
+                if not ip.startswith("127."):
+                    return ip
     except Exception:
-        return socket.gethostname()
+        pass
+    
+    return socket.gethostname()
 
 
 class NHNLoggerService:

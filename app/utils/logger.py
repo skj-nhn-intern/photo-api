@@ -42,13 +42,28 @@ request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 
 def _get_instance_ip() -> str:
-    """인스턴스 IP 반환 (hostname 대신). 실패 시 hostname 사용."""
+    """인스턴스 사설 IP 반환 (ip addr에서 추출). 실패 시 hostname 사용."""
+    import subprocess
+    import re
+    
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+        # ip addr에서 첫 번째 비-loopback IPv4 추출
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            # inet 192.168.1.107/24 형식에서 IP만 추출
+            for match in re.finditer(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result.stdout):
+                ip = match.group(1)
+                if not ip.startswith("127."):
+                    return ip
     except Exception:
-        return socket.gethostname()
+        pass
+    
+    return socket.gethostname()
 
 
 # 인스턴스 IP (한 번만 계산)
@@ -207,4 +222,10 @@ def setup_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    
+    # SQLAlchemy 로그 억제 (느린 쿼리는 app.db에서 별도 로깅)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.dialects").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.orm").setLevel(logging.WARNING)
