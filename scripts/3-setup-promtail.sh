@@ -42,11 +42,17 @@ rm -f /tmp/promtail.zip
 [[ -f "$PROMTAIL_HOME/promtail-linux-amd64" ]] && mv "$PROMTAIL_HOME/promtail-linux-amd64" "$PROMTAIL_HOME/promtail"
 chmod +x "$PROMTAIL_HOME/promtail"
 
-echo "[3/4] 설정 파일 복사 및 IP 주입..."
+echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
-sed -i "s/__INSTANCE_IP__/$INSTANCE_IP/g" "$PROMTAIL_HOME/promtail-config.yaml"
 
-echo "[4/4] systemd 서비스 설치..."
+echo "[4/4] 환경변수 파일 및 systemd 서비스 설치..."
+# 시스템 환경변수 (Promtail 실행 시 여기서 로드)
+LOKI_URL="${LOKI_URL:-http://192.168.4.73:3100}"
+cat > /etc/default/promtail << EOF
+LOKI_URL=$LOKI_URL
+INSTANCE_IP=$INSTANCE_IP
+EOF
+
 cat > /etc/systemd/system/promtail.service << 'EOF'
 [Unit]
 Description=Promtail
@@ -55,7 +61,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml
+EnvironmentFile=/etc/default/promtail
+ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
 Restart=on-failure
 RestartSec=5
 
