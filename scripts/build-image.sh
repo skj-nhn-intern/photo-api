@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ubuntu 인스턴스 이미지 빌드: 1~4단계 순차 실행
 # Packer/이미지 빌드 VM에서 실행하거나, 새 Ubuntu 인스턴스에서 한 번에 설정할 때 사용
-# 사용: sudo ./scripts/build-image.sh
+# 사용: sudo ./scripts/build-image.sh!
 # 환경변수: PHOTO_API_SOURCE, PROMTAIL_VERSION, TELEGRAF_VERSION, LOKI_URL, INFLUX_URL, INFLUX_TOKEN
 set -euo pipefail
 
