@@ -49,9 +49,11 @@ def main() -> None:
     image_base = _image_base_url(compute_url)
 
     # 1) Nova createImage 시도 (volume 루트 인스턴스면 NHN에서 400)
+    # visibility를 shared로 설정하여 파일 다운로드 권한 문제 해결 (테넌트 간 공유용)
     create_image_payload = {
         "createImage": {
             "name": image_name,
+            "visibility": "shared",  # 파일 다운로드 권한 문제 해결을 위해 shared로 설정
             "metadata": {
                 "purpose": "github-actions-build",
                 "app": "photo-api",
@@ -93,6 +95,7 @@ def main() -> None:
                     "image_name": image_name,
                     "container_format": "bare",
                     "disk_format": "raw",
+                    "visibility": "shared",  # 파일 다운로드 권한 문제 해결을 위해 shared로 설정
                     "force": True,
                 }
             }
@@ -145,7 +148,8 @@ def main() -> None:
             image_id = image["id"]
             status = image.get("status", "")
         if status == "active":
-            # 이미지 visibility를 shared로 설정 (리전 간 복제를 위해)
+            # 이미지 visibility를 shared로 설정 (파일 다운로드 권한 문제 해결을 위해)
+            # 참고: shared는 테넌트 간 공유용이며, 리전 간 복제와는 무관
             print(f"🔧 이미지 visibility를 shared로 설정 중...")
             update_headers = {**headers, "X-Image-Meta-Visibility": "shared"}
             update_response = requests.patch(

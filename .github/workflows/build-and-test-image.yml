@@ -377,18 +377,19 @@ jobs:
           
           exit 1
 
-      - name: Upload image to KR2 (이미지 업로드만, 인스턴스 생성 없음)
-        id: upload_image_kr2
-        continue-on-error: true
-        env:
-          TOKEN: ${{ steps.create_instance.outputs.token }}
-          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
-          SOURCE_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR1 }}
-          SOURCE_IMAGE_ID: ${{ steps.create_image.outputs.image_id }}
-          SOURCE_IMAGE_NAME: ${{ steps.create_image.outputs.image_name }}
-          TARGET_REGION: KR2
-          TARGET_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR2 }}
-        run: python3 scripts/ci/copy_image_to_region.py
+      # KR2 이미지 업로드 비활성화 (필요시 활성화)
+      # - name: Upload image to KR2 (이미지 업로드만, 인스턴스 생성 없음)
+      #   id: upload_image_kr2
+      #   continue-on-error: true
+      #   env:
+      #     TOKEN: ${{ steps.create_instance.outputs.token }}
+      #     COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
+      #     SOURCE_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR1 }}
+      #     SOURCE_IMAGE_ID: ${{ steps.create_image.outputs.image_id }}
+      #     SOURCE_IMAGE_NAME: ${{ steps.create_image.outputs.image_name }}
+      #     TARGET_REGION: KR2
+      #     TARGET_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR2 }}
+      #   run: python3 scripts/ci/copy_image_to_region.py
 
       - name: Cleanup KR1 resources
         if: always() && github.event.inputs.skip_cleanup != 'true'
@@ -414,13 +415,13 @@ jobs:
           echo "| 빌드 인스턴스 IP | ${{ steps.create_instance.outputs.instance_ip }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 이미지 이름 | ${{ steps.create_image.outputs.image_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| KR1 이미지 ID | ${{ steps.create_image.outputs.image_id }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| KR2 이미지 ID | ${{ steps.upload_image_kr2.outputs.target_image_id || '-' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| KR2 이미지 ID | - (비활성화됨) |" >> $GITHUB_STEP_SUMMARY
           echo "| 테스트 인스턴스 ID | ${{ steps.test_instance.outputs.test_instance_id }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 테스트 인스턴스 IP | ${{ steps.test_instance.outputs.test_instance_ip }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 이미지 정보" >> $GITHUB_STEP_SUMMARY
           echo "- **이미지 이름**: ${{ steps.create_image.outputs.image_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **KR1 이미지 ID**: ${{ steps.create_image.outputs.image_id }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **KR2 이미지 ID**: ${{ steps.upload_image_kr2.outputs.target_image_id || '-' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **KR2 이미지 ID**: - (비활성화됨)" >> $GITHUB_STEP_SUMMARY
           echo "- **Git Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **빌드 시간**: $(date -u)" >> $GITHUB_STEP_SUMMARY

@@ -3,6 +3,12 @@
 KR1에서 생성한 이미지를 다른 리전(KR2 등) Image API로 복사.
 인스턴스는 생성하지 않고, Image API만 사용 (GET image file from source → POST+PUT to target).
 
+참고: 
+- shared visibility는 테넌트 간 공유를 위한 것이지, 리전 간 복제를 위한 것이 아님
+- 리전 간에는 별도의 이미지 저장소가 있어 복제가 필요함
+- shared visibility로 설정하면 파일 다운로드 권한 문제는 해결될 수 있음 (같은 테넌트 내에서)
+"""
+
 필수 환경 변수:
   TOKEN: NHN Cloud 인증 토큰 (X-Auth-Token)
   SOURCE_IMAGE_ID: KR1에서 생성한 이미지 ID (예: create_image.py의 출력)
@@ -91,7 +97,30 @@ def main() -> None:
     headers = {"X-Auth-Token": token}
     headers_json = {**headers, "Content-Type": "application/json"}
 
-    # 0) 토큰 권한 검증 (Image API 접근 가능 여부 확인)
+    # 0) 타겟 리전에서 이미지가 이미 존재하는지 확인
+    # 참고: 리전 간에는 별도의 이미지 저장소가 있어, 같은 이미지 ID라도 각 리전에 별도로 존재해야 함
+    print(f"🔍 타겟 리전({target_region})에서 이미지 존재 여부 확인 중...")
+    target_check = requests.get(f"{target_base}/v2/images/{source_id}", headers=headers_json)
+    if target_check.status_code == 200:
+        target_image = target_check.json().get("image") or target_check.json()
+        target_status = target_image.get("status", "")
+        if target_status == "active":
+            print(f"✅ 타겟 리전({target_region})에 이미지가 이미 존재함 (복제 불필요)")
+            print(f"   이미지 ID: {source_id}, 상태: {target_status}")
+            out = os.environ.get("GITHUB_OUTPUT")
+            if out:
+                with open(out, "a") as f:
+                    f.write(f"target_image_id={source_id}\n")
+                    f.write(f"target_region={target_region}\n")
+            return  # 복제 불필요, 이미 존재
+        else:
+            print(f"ℹ️  타겟 리전에 이미지가 있지만 상태가 {target_status}입니다. 복제 진행...")
+    elif target_check.status_code == 404:
+        print(f"ℹ️  타겟 리전({target_region})에 이미지가 없습니다. 복제 진행...")
+    else:
+        print(f"⚠️  타겟 리전 이미지 확인 실패: {target_check.status_code}. 복제 진행...")
+
+    # 0-1) 토큰 권한 검증 (Image API 접근 가능 여부 확인)
     print("🔍 토큰 권한 검증 중...")
     test_list = requests.get(f"{source_base}/v2/images", headers=headers_json, params={"limit": 1})
     if test_list.status_code == 401:
