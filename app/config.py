@@ -5,7 +5,7 @@ Manages all environment variables and settings.
 from enum import Enum
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 
 class Environment(str, Enum):
@@ -48,8 +48,15 @@ class Settings(BaseSettings):
         """Check if running in production mode."""
         return self.environment == Environment.PRODUCTION
     
-    # Database
+    # Database (빈 문자열이면 기본값 사용 - CI/이미지 검증 시 .env에 없을 수 있음)
     database_url: str = Field(default="sqlite+aiosqlite:///./photo_api.db")
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def coerce_empty_database_url(cls, v: str) -> str:
+        if not v or not str(v).strip():
+            return "sqlite+aiosqlite:///./photo_api.db"
+        return v
     
     # JWT
     jwt_secret_key: str = Field(default="jwt-secret-change-in-production")
@@ -78,6 +85,17 @@ class Settings(BaseSettings):
     nhn_storage_username: str = Field(default="", description="레거시: nhn_storage_iam_user 사용")
     nhn_storage_password: str = Field(default="", description="레거시: nhn_storage_iam_password 사용")
     
+    # NHN Cloud Object Storage S3 API credentials (Presigned URL 사용)
+    # 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
+    nhn_s3_access_key: str = Field(default="", description="S3 API Access Key (EC2 credentials)")
+    nhn_s3_secret_key: str = Field(default="", description="S3 API Secret Key (EC2 credentials)")
+    nhn_s3_endpoint_url: str = Field(
+        default="https://kr1-api-object-storage.nhncloudservice.com",
+        description="S3 API Endpoint URL"
+    )
+    nhn_s3_region_name: str = Field(default="kr1", description="S3 Region Name")
+    nhn_s3_presigned_url_expire_seconds: int = Field(default=3600, description="Presigned URL 유효 시간 (초)")
+    
     # NHN Cloud CDN (Auth Token API)
     # https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-token-api
     nhn_cdn_domain: str = Field(default="", description="CDN 도메인 (예: xxx.toastcdn.net)")
@@ -85,6 +103,16 @@ class Settings(BaseSettings):
     nhn_cdn_secret_key: str = Field(default="", description="CDN API Secret Key (API 인증용)")
     nhn_cdn_encrypt_key: str = Field(default="", description="CDN Token Encryption Key (토큰 생성용)")
     nhn_cdn_token_expire_seconds: int = Field(default=3600, description="Auth Token 유효 시간 (초)")
+    
+    # 이미지 접근 제어: 프록시 사용 시 URL 유출되어도 짧은 시간만 유효
+    image_access_use_proxy: bool = Field(
+        default=True,
+        description="True면 이미지를 백엔드 경유(프록시)로 제공하고, URL에 짧은 유효기간 토큰 사용. False면 CDN URL 직접 반환(기존 방식).",
+    )
+    image_token_expire_seconds: int = Field(
+        default=120,
+        description="이미지 접근 토큰 유효 시간(초). image_access_use_proxy=True일 때만 사용.",
+    )
     
     # NHN Cloud Log & Crash
     nhn_log_appkey: str = Field(default="")
@@ -96,6 +124,15 @@ class Settings(BaseSettings):
     
     # Prometheus (Observability). Loki 로그는 Promtail이 /var/log/photo-api 파일을 읽어 전송
     node_name: str = Field(default="", description="Node/Pod identifier for Prometheus labels")
+    # Pushgateway: 설정 시 주기적으로 메트릭을 Pushgateway로 전송 (추후 연동용)
+    prometheus_pushgateway_url: str = Field(
+        default="",
+        description="Prometheus Pushgateway URL (e.g. http://pushgateway:9091). 비우면 푸시 안 함.",
+    )
+    prometheus_push_interval_seconds: int = Field(
+        default=30,
+        description="Pushgateway로 메트릭 전송 주기(초). prometheus_pushgateway_url 설정 시에만 사용.",
+    )
     
     # 인스턴스 식별용 사설 IP (로그·메트릭용). 비우면 자동 감지(ip addr), 오토스케일 시 서버마다 다름
     instance_ip: str = Field(default="", description="서버 사설 IP (비우면 자동 감지)")

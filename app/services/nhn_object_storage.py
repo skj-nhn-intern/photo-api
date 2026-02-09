@@ -3,16 +3,21 @@ NHN Cloud Object Storage service integration.
 Handles file upload, download, and deletion from Object Storage.
 
 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/api-guide/
+S3 API 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
 """
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime, timedelta
 
 import httpx
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
 
 from app.config import get_settings
 from app.utils.prometheus_metrics import record_external_request
+from app.utils.logger import log_error, log_warning
 
 logger = logging.getLogger("app.storage")
 
@@ -41,6 +46,7 @@ class NHNObjectStorageService:
         self._storage_url: Optional[str] = None
         self._account: Optional[str] = None
         self._lock = asyncio.Lock()
+        self._s3_client: Optional[boto3.client] = None
     
     async def _get_auth_token(self) -> str:
         """
@@ -111,24 +117,45 @@ class NHNObjectStorageService:
                     # 응답 본문 파싱
                     try:
                         data = response.json()
-                    except Exception:
-                        logger.error("IAM response parse failed", extra={"event": "storage", "status": status_code})
+                    except Exception as parse_error:
+                        log_error(
+                            "IAM authentication response parsing failed",
+                            error_type="ResponseParseError",
+                            error_code="STORAGE_001",
+                            upstream_service="nhn_storage_iam",
+                            http_status=status_code,
+                            event="storage",
+                            exc_info=True,
+                        )
                         raise Exception("IAM 인증 응답을 파싱할 수 없습니다.")
                     
                     # 상태 코드가 200이 아니면 에러 처리
                     if status_code != 200:
                         error_message = "IAM 인증에 실패했습니다."
+                        error_code = "STORAGE_002"
                         try:
                             error_detail = data.get("error", {})
                             if isinstance(error_detail, dict):
                                 error_msg = error_detail.get("message", "")
                                 if "Could not find" in error_msg or "tenant" in error_msg.lower():
                                     error_message = f"IAM 인증 실패: Tenant ID를 찾을 수 없습니다."
+                                    error_code = "STORAGE_002_TENANT"
                                 elif "Unauthorized" in error_msg or status_code == 401:
                                     error_message = "IAM 인증 실패: 인증 정보가 올바르지 않습니다."
+                                    error_code = "STORAGE_002_AUTH"
                         except Exception:
                             pass
-                        logger.error("IAM auth failed", extra={"event": "storage", "status": status_code})
+                        
+                        log_error(
+                            "IAM authentication failed",
+                            error_type="AuthenticationError",
+                            error_message=error_message,
+                            error_code=error_code,
+                            upstream_service="nhn_storage_iam",
+                            http_status=status_code,
+                            event="storage",
+                            exc_info=False,
+                        )
                         raise Exception(error_message)
                     
                     # Keystone v2 API 응답 형식
@@ -139,7 +166,14 @@ class NHNObjectStorageService:
                     # 토큰 ID 추출
                     self._token = token_data.get("id")
                     if not self._token:
-                        logger.error("IAM token not found", extra={"event": "storage"})
+                        log_error(
+                            "IAM token not found in response",
+                            error_type="TokenError",
+                            error_code="STORAGE_003",
+                            upstream_service="nhn_storage_iam",
+                            event="storage",
+                            exc_info=False,
+                        )
                         raise Exception("IAM 토큰을 받을 수 없습니다.")
                     
                     # 토큰 만료 시간 추출
@@ -163,7 +197,14 @@ class NHNObjectStorageService:
                         tenant_id_from_response = tenant_id
                     
                     if not tenant_id_from_response:
-                        logger.error("IAM tenant ID not found", extra={"event": "storage"})
+                        log_error(
+                            "IAM tenant ID not found in response",
+                            error_type="TenantError",
+                            error_code="STORAGE_004",
+                            upstream_service="nhn_storage_iam",
+                            event="storage",
+                            exc_info=False,
+                        )
                         raise Exception("Tenant ID를 찾을 수 없습니다. NHN_STORAGE_TENANT_ID를 설정하세요.")
                     
                     self._account = f"AUTH_{tenant_id_from_response}"
@@ -172,16 +213,39 @@ class NHNObjectStorageService:
                     return self._token
                     
             except httpx.HTTPStatusError as e:
-                logger.error("Storage auth HTTP error", exc_info=e, extra={"event": "storage"})
+                log_error(
+                    "Storage authentication HTTP error",
+                    error_type="HTTPStatusError",
+                    error_code="STORAGE_005",
+                    upstream_service="nhn_storage_iam",
+                    http_status=e.response.status_code if hasattr(e, 'response') else None,
+                    event="storage",
+                    exc_info=True,
+                )
                 raise Exception("IAM 인증에 실패했습니다.")
             except httpx.HTTPError as e:
-                logger.error("Storage auth network error", exc_info=e, extra={"event": "storage"})
+                log_error(
+                    "Storage authentication network error",
+                    error_type="NetworkError",
+                    error_code="STORAGE_006",
+                    upstream_service="nhn_storage_iam",
+                    event="storage",
+                    exc_info=True,
+                )
                 raise Exception("IAM 인증 중 네트워크 오류가 발생했습니다.")
             except Exception as e:
                 error_msg = str(e)
                 if "IAM" in error_msg or "네트워크" in error_msg:
                     raise
-                logger.error("Storage auth failed", exc_info=e, extra={"event": "storage"})
+                log_error(
+                    "Storage authentication failed with unexpected error",
+                    error_type=type(e).__name__,
+                    error_message=error_msg,
+                    error_code="STORAGE_007",
+                    upstream_service="nhn_storage_iam",
+                    event="storage",
+                    exc_info=True,
+                )
                 raise Exception(f"Storage authentication failed: {error_msg}")
     
     def _get_storage_url(self) -> str:
@@ -446,6 +510,113 @@ class NHNObjectStorageService:
         except Exception as e:
             logger.error("File exists check failed", exc_info=e, extra={"event": "storage", "object": object_name})
             return False
+    
+    def _get_s3_client(self) -> boto3.client:
+        """
+        Get or create S3 client for presigned URL generation.
+        
+        NHN Cloud S3 API 참조:
+        https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
+        
+        Returns:
+            Configured boto3 S3 client
+        """
+        if self._s3_client is not None:
+            return self._s3_client
+        
+        if not self.settings.nhn_s3_access_key or not self.settings.nhn_s3_secret_key:
+            raise Exception(
+                "S3 API credentials not configured. "
+                "Please set NHN_S3_ACCESS_KEY and NHN_S3_SECRET_KEY environment variables."
+            )
+        
+        # NHN Cloud S3 API 설정
+        # 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/#aws-sdk
+        self._s3_client = boto3.client(
+            's3',
+            aws_access_key_id=self.settings.nhn_s3_access_key,
+            aws_secret_access_key=self.settings.nhn_s3_secret_key,
+            endpoint_url=self.settings.nhn_s3_endpoint_url,
+            region_name=self.settings.nhn_s3_region_name,
+            config=Config(
+                signature_version='s3v4',
+                s3={'addressing_style': 'path'}  # NHN Cloud는 path-style URL 사용
+            )
+        )
+        
+        return self._s3_client
+    
+    def generate_presigned_upload_url(
+        self,
+        object_name: str,
+        content_type: str,
+        expires_in: Optional[int] = None,
+    ) -> Dict[str, str]:
+        """
+        Generate a presigned URL for direct upload to Object Storage.
+        
+        NHN Cloud S3 API 참조:
+        https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
+        
+        Args:
+            object_name: The name/path of the object in storage (예: photos/1/abc123.jpg)
+            content_type: MIME type of the file
+            expires_in: URL expiration time in seconds (default: from settings)
+            
+        Returns:
+            Dictionary with 'url' and 'fields' for the upload
+            
+        Example:
+            >>> service = get_storage_service()
+            >>> result = service.generate_presigned_upload_url(
+            ...     "photos/1/test.jpg",
+            ...     "image/jpeg",
+            ...     expires_in=3600
+            ... )
+            >>> print(result['url'])  # Use this URL for PUT request
+        """
+        if expires_in is None:
+            expires_in = self.settings.nhn_s3_presigned_url_expire_seconds
+        
+        container = self.settings.nhn_storage_container
+        s3_client = self._get_s3_client()
+        
+        try:
+            # Presigned URL for PUT operation
+            # 클라이언트는 이 URL로 PUT 요청을 보내면 됨
+            url = s3_client.generate_presigned_url(
+                ClientMethod='put_object',
+                Params={
+                    'Bucket': container,
+                    'Key': object_name,
+                    'ContentType': content_type,
+                },
+                ExpiresIn=expires_in,
+                HttpMethod='PUT'
+            )
+            
+            return {
+                'url': url,
+                'method': 'PUT',
+                'headers': {
+                    'Content-Type': content_type,
+                }
+            }
+            
+        except ClientError as e:
+            logger.error(
+                "Presigned URL generation failed",
+                exc_info=e,
+                extra={"event": "storage", "object": object_name}
+            )
+            raise Exception(f"Failed to generate presigned URL: {str(e)}")
+        except Exception as e:
+            logger.error(
+                "Presigned URL generation failed",
+                exc_info=e,
+                extra={"event": "storage", "object": object_name}
+            )
+            raise Exception(f"Failed to generate presigned URL: {str(e)}")
 
 
 # Singleton instance

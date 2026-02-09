@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""
+KR1에서 생성한 이미지를 다른 리전(KR2 등) Image API로 복사.
+인스턴스는 생성하지 않고, Image API만 사용 (GET image file from source → POST+PUT to target).
+환경 변수: TOKEN, SOURCE_IMAGE_ID, SOURCE_IMAGE_NAME, TARGET_REGION
+  SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL(KR1) 중 하나 필요.
+  TARGET_IMAGE_BASE_URL: 타겟 리전 Image API 베이스 URL (시크릿 권장, 없으면 리전으로 추론).
+  COMPUTE_URL이 있으면 kr1-api-instance → kr1-api-image 로 추론.
+"""
+import os
+import sys
+import time
+
+import requests
+
+
+def _image_base_from_compute_url(compute_url: str) -> str:
+    """Compute URL에서 Image API 베이스 URL 추론 (NHN: kr1-api-instance → kr1-api-image)."""
+    base = compute_url.split("/v2/")[0]
+    return base.replace("-instance-", "-image-")
+
+
+def _image_base_for_region(region: str) -> str:
+    """리전 코드로 NHN Image API 베이스 URL 반환."""
+    r = (region or "kr1").strip().lower()
+    return f"https://{r}-api-image-infrastructure.nhncloudservice.com"
+
+
+def main() -> None:
+    token = os.environ.get("TOKEN", "").strip()
+    source_base = os.environ.get("SOURCE_IMAGE_BASE_URL", "").strip()
+    if not source_base:
+        compute_url = os.environ.get("COMPUTE_URL", "").strip()
+        if compute_url:
+            source_base = _image_base_from_compute_url(compute_url)
+    source_id = os.environ.get("SOURCE_IMAGE_ID", "").strip()
+    source_name = os.environ.get("SOURCE_IMAGE_NAME", "").strip()
+    target_region = os.environ.get("TARGET_REGION", "KR2").strip()
+
+    if not all([token, source_base, source_id, source_name]):
+        print("❌ TOKEN, (SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL), SOURCE_IMAGE_ID, SOURCE_IMAGE_NAME 필요", file=sys.stderr)
+        sys.exit(1)
+
+    target_base = os.environ.get("TARGET_IMAGE_BASE_URL", "").strip()
+    if not target_base:
+        target_base = _image_base_for_region(target_region)
+    headers = {"X-Auth-Token": token}
+    headers_json = {**headers, "Content-Type": "application/json"}
+
+    # 0) 토큰 권한 검증 (Image API 접근 가능 여부 확인)
+    print("🔍 토큰 권한 검증 중...")
+    test_list = requests.get(f"{source_base}/v2/images", headers=headers_json, params={"limit": 1})
+    if test_list.status_code == 401:
+        print("❌ 토큰이 유효하지 않거나 만료됨 (401 Unauthorized)", file=sys.stderr)
+        sys.exit(1)
+    if test_list.status_code == 403:
+        print("❌ 토큰에 Image API 접근 권한이 없음 (403 Forbidden)", file=sys.stderr)
+        print("   NHN Cloud 콘솔에서 사용자에게 Image 서비스에 대한 'member' 또는 'admin' 역할을 부여하세요.", file=sys.stderr)
+        sys.exit(1)
+    if not test_list.ok:
+        print(f"⚠️  Image API 접근 테스트 실패: {test_list.status_code}", file=sys.stderr)
+    else:
+        print("✅ 토큰 권한 검증 완료")
+
+    # 1) 소스 이미지 상세 조회 (disk_format, container_format 등)
+    r = requests.get(f"{source_base}/v2/images/{source_id}", headers=headers_json)
+    if r.status_code == 404:
+        print(f"❌ 소스 이미지를 찾을 수 없음: {source_id}", file=sys.stderr)
+        sys.exit(1)
+    if r.status_code == 403:
+        print(f"❌ 소스 이미지 메타데이터 접근 권한 없음: {source_id}", file=sys.stderr)
+        print(f"   토큰이 Image API에 대한 읽기 권한이 있는지 확인하세요.", file=sys.stderr)
+        sys.exit(1)
+    r.raise_for_status()
+    image_meta = r.json().get("image") or r.json()
+    container_format = image_meta.get("container_format") or "bare"
+    disk_format = image_meta.get("disk_format") or "raw"
+    
+    # 이미지 소유자 및 권한 확인 (디버깅용)
+    owner = image_meta.get("owner")
+    visibility = image_meta.get("visibility", "unknown")
+    status = image_meta.get("status", "")
+    print(f"ℹ️  이미지 정보: owner={owner}, visibility={visibility}, status={status}")
+
+    # 1-1) 이미지가 active 상태가 될 때까지 대기 (파일 다운로드 전 필수)
+    if status != "active":
+        print(f"⏳ 이미지가 active 상태가 될 때까지 대기 중... (현재: {status})")
+        max_wait = 600
+        start = time.time()
+        while time.time() - start < max_wait:
+            r = requests.get(f"{source_base}/v2/images/{source_id}", headers=headers_json)
+            r.raise_for_status()
+            img = r.json().get("image") or r.json()
+            status = img.get("status", "")
+            if status == "active":
+                print(f"✅ 이미지 active 상태 확인")
+                break
+            if status in ("killed", "deleted", "error"):
+                print(f"❌ 이미지 상태가 {status}입니다. 복제할 수 없습니다.", file=sys.stderr)
+                sys.exit(1)
+            print(f"  이미지 상태: {status}, 대기 중...")
+            time.sleep(10)
+        else:
+            print(f"❌ 이미지 active 대기 타임아웃 (현재 상태: {status})", file=sys.stderr)
+            sys.exit(1)
+
+    # 2) 소스 이미지 파일 스트림
+    print(f"📥 소스 리전에서 이미지 다운로드 중: {source_id}")
+    get_file = requests.get(
+        f"{source_base}/v2/images/{source_id}/file",
+        headers=headers,
+        stream=True,
+    )
+    if get_file.status_code == 403:
+        print(f"❌ 이미지 파일 다운로드 권한 없음 (403 Forbidden)", file=sys.stderr)
+        print(f"   원인 가능성:", file=sys.stderr)
+        print(f"   1. 토큰에 Image API 파일 다운로드 권한이 없음", file=sys.stderr)
+        print(f"   2. 이미지 소유자({owner})와 토큰 테넌트가 다름", file=sys.stderr)
+        print(f"   3. 이미지가 private이고 공유되지 않음", file=sys.stderr)
+        print(f"   해결 방법:", file=sys.stderr)
+        print(f"   - NHN Cloud 콘솔에서 사용자에게 'member' 또는 'admin' 역할 부여", file=sys.stderr)
+        print(f"   - 또는 이미지를 'shared'로 설정하거나 다른 테넌트와 공유", file=sys.stderr)
+        print(f"   - 또는 Compute API를 통해 이미지 내보내기 사용 (Nova export)", file=sys.stderr)
+        sys.exit(1)
+    get_file.raise_for_status()
+
+    # 3) 타겟 리전에 이미지 생성 (메타데이터만)
+    create_body = {
+        "name": source_name,
+        "container_format": container_format,
+        "disk_format": disk_format,
+        "visibility": "private",
+    }
+    create = requests.post(
+        f"{target_base}/v2/images",
+        headers=headers_json,
+        json=create_body,
+    )
+    if not create.ok:
+        print(f"❌ 타겟 리전 이미지 생성 실패: {create.status_code}", file=sys.stderr)
+        print(create.text[:500], file=sys.stderr)
+        sys.exit(1)
+    target_image = create.json().get("image") or create.json()
+    target_id = target_image.get("id")
+    if not target_id:
+        print("❌ 타겟 이미지 ID를 찾을 수 없음", file=sys.stderr)
+        sys.exit(1)
+    print(f"📤 타겟 리전({target_region}) 이미지 생성됨: {target_id}, 업로드 중...")
+
+    # 4) 타겟에 이미지 데이터 업로드 (PUT /file)
+    # 스트리밍 업로드: iter_content를 사용하여 메모리 효율적으로 전송
+    put_headers = {"X-Auth-Token": token, "Content-Type": "application/octet-stream"}
+    content_length = get_file.headers.get("Content-Length")
+    if content_length:
+        put_headers["Content-Length"] = content_length
+    
+    print(f"📤 타겟 리전({target_region})에 이미지 데이터 업로드 중...")
+    # iter_content로 청크 단위로 스트리밍 업로드
+    def generate_chunks():
+        for chunk in get_file.iter_content(chunk_size=8192 * 1024):  # 8MB 청크
+            if chunk:
+                yield chunk
+    
+    upload = requests.put(
+        f"{target_base}/v2/images/{target_id}/file",
+        headers=put_headers,
+        data=generate_chunks(),
+        timeout=3600,
+    )
+    if not upload.ok:
+        print(f"❌ 타겟 리전 이미지 업로드 실패: {upload.status_code}", file=sys.stderr)
+        print(upload.text[:500], file=sys.stderr)
+        sys.exit(1)
+
+    # 5) active 될 때까지 대기
+    max_wait = 900
+    start = time.time()
+    while time.time() - start < max_wait:
+        r = requests.get(f"{target_base}/v2/images/{target_id}", headers=headers_json)
+        r.raise_for_status()
+        img = r.json().get("image") or r.json()
+        status = img.get("status", "")
+        if status == "active":
+            print(f"✅ 이미지 복사 완료: {target_region} image_id={target_id}")
+            out = os.environ.get("GITHUB_OUTPUT")
+            if out:
+                with open(out, "a") as f:
+                    f.write(f"target_image_id={target_id}\n")
+                    f.write(f"target_region={target_region}\n")
+            return
+        if status == "killed" or status == "deleted":
+            print(f"❌ 이미지 상태: {status}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  타겟 이미지 상태: {status}, 대기 중...")
+        time.sleep(15)
+
+    print("❌ 타겟 이미지 active 대기 타임아웃", file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

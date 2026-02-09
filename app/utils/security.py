@@ -109,6 +109,44 @@ def decode_access_token(token: str) -> Optional[TokenPayload]:
         return None
 
 
+def create_image_access_token(photo_id: int) -> str:
+    """
+    Create a short-lived JWT for image access (proxy URL).
+    Only issued to authorized users; token in URL limits exposure window.
+    """
+    expire = datetime.utcnow() + timedelta(seconds=settings.image_token_expire_seconds)
+    to_encode = {
+        "sub": str(photo_id),
+        "exp": expire,
+        "scope": "image",
+    }
+    return jwt.encode(
+        to_encode,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def verify_image_access_token(token: str) -> Optional[int]:
+    """
+    Verify image access token and return photo_id if valid.
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+        if payload.get("scope") != "image":
+            return None
+        sub = payload.get("sub")
+        if sub is None:
+            return None
+        return int(sub)
+    except (JWTError, ValueError, TypeError):
+        return None
+
+
 def generate_share_token(length: int = 32) -> str:
     """
     Generate a secure random token for share links.

@@ -7,7 +7,9 @@ Main application entry point that configures:
 - Database lifecycle
 - Logging system
 - Exception handlers
+- Prometheus metrics (스크래핑 + 선택적 Pushgateway)
 """
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -20,9 +22,16 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.routers import auth_router, photos_router, albums_router, share_router
-from app.utils.prometheus_metrics import exceptions_total, ready, setup_prometheus
+from app.utils.prometheus_metrics import (
+    exceptions_total,
+    ready,
+    setup_prometheus,
+    pushgateway_loop,
+)
 from app.services.nhn_logger import get_logger_service
-from app.utils.logger import setup_logging, set_request_id, get_request_id
+from app.utils.logger import setup_logging, get_request_id, log_error, log_info
+from app.middlewares.logging_middleware import LoggingMiddleware
+from app.utils.client_ip import get_client_ip, get_forwarded_proto, get_forwarded_host
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -35,18 +44,29 @@ setup_logging()
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan: startup / shutdown."""
     ready.set(1)
-    logger.info(
-        "Startup",
-        extra={"event": "lifecycle", "version": settings.app_version},
+    log_info(
+        "Application startup completed",
+        event="lifecycle",
+        version=settings.app_version,
+        environment=settings.environment.value,
     )
     await init_db()
     logger_service = get_logger_service()
     await logger_service.start()
 
+    # Pushgateway 연동: PROMETHEUS_PUSHGATEWAY_URL 설정 시 백그라운드에서 주기 푸시
+    pushgateway_task = asyncio.create_task(pushgateway_loop())
+
     yield
 
+    pushgateway_task.cancel()
+    try:
+        await pushgateway_task
+    except asyncio.CancelledError:
+        pass
+
     ready.set(0)
-    logger.info("Shutdown", extra={"event": "lifecycle"})
+    log_info("Application shutdown initiated", event="lifecycle")
     await logger_service.stop()
     await close_db()
 
@@ -96,23 +116,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add structured logging middleware
+app.add_middleware(LoggingMiddleware)
+
 
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Unhandled exception → ERROR 로그 + 500 응답."""
+    """
+    Unhandled exception handler with structured logging.
+    
+    모든 처리되지 않은 예외를 캐치하여:
+    - ERROR 로그 남김 (구조화된 포맷)
+    - 500 응답 반환
+    - Request ID 포함 (장애 추적용)
+    """
     exceptions_total.inc()
     rid = get_request_id()
-    logger.error(
-        "Unhandled exception",
-        exc_info=exc,
-        extra={
-            "event": "exception",
-            "path": request.url.path,
-            "method": request.method,
-            "rid": rid,
-        },
+    
+    log_error(
+        "Unhandled exception occurred",
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        error_code="INTERNAL_SERVER_ERROR",
+        http_method=request.method,
+        http_path=request.url.path,
+        request_id=rid,
+        event="exception",
+        exc_info=True,
     )
+    
     # 클라이언트에게 Request ID 반환 (장애 추적용)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -121,66 +154,6 @@ async def global_exception_handler(request: Request, exc: Exception):
             "request_id": rid,  # 사용자가 이 ID로 문의 가능
         },
     )
-
-
-# 느린 응답 임계값 (ms)
-SLOW_REQUEST_THRESHOLD_MS = 3000
-
-# Request ID 헤더 이름
-REQUEST_ID_HEADER = "X-Request-ID"
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """
-    요청 로깅 미들웨어.
-    
-    기능:
-    - Request ID 생성/전파 (장애 추적용)
-    - 요청/응답 로깅
-    
-    로깅 기준 (운영 노이즈 최소화):
-    - 4xx/5xx 에러 응답 → WARNING/ERROR
-    - 느린 응답 (3초 이상) → WARNING
-    - 정상 응답 → 로깅 안 함
-    """
-    # 헬스체크, 문서 등 제외 (Request ID도 불필요)
-    if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc", "/metrics"):
-        return await call_next(request)
-    
-    # Request ID 설정 (클라이언트 제공 또는 새로 생성)
-    incoming_rid = request.headers.get(REQUEST_ID_HEADER)
-    rid = set_request_id(incoming_rid)
-    
-    start = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = round((time.perf_counter() - start) * 1000)
-    
-    # 응답 헤더에 Request ID 포함 (클라이언트가 추적 가능)
-    response.headers[REQUEST_ID_HEADER] = rid
-    
-    log_data = {
-        "event": "request",
-        "method": request.method,
-        "path": request.url.path,
-        "status": response.status_code,
-        "ms": duration_ms,
-        # rid는 JsonLinesFormatter에서 자동 추가되지만, 명시적으로도 포함
-    }
-    
-    # 5xx 서버 에러 → ERROR (상세 정보 포함)
-    if response.status_code >= 500:
-        log_data["client_ip"] = request.client.host if request.client else None
-        logger.error("Request error", extra=log_data)
-    # 4xx 클라이언트 에러 → WARNING
-    elif response.status_code >= 400:
-        logger.warning("Request failed", extra=log_data)
-    # 느린 응답 → WARNING (성능 문제 추적)
-    elif duration_ms >= SLOW_REQUEST_THRESHOLD_MS:
-        logger.warning("Slow request", extra=log_data)
-    # 정상 응답은 로깅 안 함 (운영 노이즈 최소화)
-    
-    return response
 
 
 # Include routers
@@ -219,3 +192,49 @@ async def health_check():
     Returns 200 OK if the service is running.
     """
     return {"status": "healthy"}
+
+
+# Debug endpoint for client IP
+@app.get(
+    "/debug/client-info",
+    tags=["Debug"],
+    summary="Debug: Client IP and headers",
+)
+async def debug_client_info(request: Request):
+    """
+    디버깅용: 클라이언트 IP 및 헤더 정보 조회.
+    
+    프록시/로드밸런서 설정이 올바른지 확인하는 데 사용합니다.
+    
+    **주의:** 프로덕션 환경에서는 제거하거나 인증을 추가하는 것을 권장합니다.
+    
+    Returns:
+        - client_ip: 추출된 실제 클라이언트 IP
+        - request_client_host: FastAPI가 보는 직접 연결 IP
+        - headers: 프록시 관련 헤더들
+        - url: 요청 URL 정보
+    """
+    return {
+        "client_ip": get_client_ip(request),
+        "request_client_host": request.client.host if request.client else None,
+        "forwarded_proto": get_forwarded_proto(request),
+        "forwarded_host": get_forwarded_host(request),
+        "headers": {
+            "x-forwarded-for": request.headers.get("X-Forwarded-For"),
+            "x-real-ip": request.headers.get("X-Real-IP"),
+            "x-forwarded-proto": request.headers.get("X-Forwarded-Proto"),
+            "x-forwarded-host": request.headers.get("X-Forwarded-Host"),
+            "user-agent": request.headers.get("User-Agent"),
+            "cf-connecting-ip": request.headers.get("CF-Connecting-IP"),
+            "true-client-ip": request.headers.get("True-Client-IP"),
+            "host": request.headers.get("Host"),
+        },
+        "url": {
+            "scheme": request.url.scheme,
+            "host": request.url.hostname,
+            "port": request.url.port,
+            "path": request.url.path,
+            "full_url": str(request.url),
+        },
+        "note": "이 엔드포인트는 프로덕션에서 제거하거나 인증을 추가하세요.",
+    }

@@ -9,6 +9,8 @@ from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
 from app.services.auth import AuthService
 from app.dependencies.auth import get_current_active_user
+from app.utils.logger import log_info, log_warning, log_error
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
@@ -33,8 +35,22 @@ async def register(
     
     try:
         user = await auth_service.register(user_data)
+        
+        # 주요 비즈니스 이벤트 로깅 (INFO 레벨)
+        log_info(
+            "User registration completed",
+            event="user_registration",
+            user_id=user.id,
+        )
+        
         return UserResponse.model_validate(user)
     except ValueError as e:
+        # 잠재적 문제 로깅 (WARN 레벨)
+        log_warning(
+            "User registration failed - validation error",
+            event="user_registration",
+            error_message=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Registration failed",
@@ -64,11 +80,22 @@ async def login(
     token = await auth_service.login(login_data.email, login_data.password)
     
     if not token:
+        # 잠재적 문제 로깅 (WARN 레벨) - 무차별 대입 공격 탐지 가능
+        log_warning(
+            "Login failed - invalid credentials",
+            event="user_login",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # 주요 비즈니스 이벤트 로깅 (INFO 레벨)
+    log_info(
+        "User login successful",
+        event="user_login",
+    )
     
     return token
 

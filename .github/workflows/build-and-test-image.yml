@@ -1,0 +1,425 @@
+name: Build and Test NHN Cloud Instance Image
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      skip_cleanup:
+        description: 'Skip resource cleanup (for debugging)'
+        required: false
+        default: 'false'
+
+env:
+  PYTHON_VERSION: '3.11'
+  PROMTAIL_VERSION: '3.6.4'
+
+jobs:
+  build-and-create-image:
+    name: Build and create image (KR1, KR2)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Set KR1 for build and test
+        run: |
+          echo "NHN_REGION=KR1" >> $GITHUB_ENV
+          if [ -n "${{ secrets.NHN_NETWORK_ID_KR1 }}" ]; then
+            echo "NHN_NETWORK_ID=${{ secrets.NHN_NETWORK_ID_KR1 }}" >> $GITHUB_ENV
+          else
+            echo "NHN_NETWORK_ID=${{ secrets.NHN_NETWORK_ID }}" >> $GITHUB_ENV
+          fi
+          echo "이미지 업로드(create image): KR1, KR2 동일하게. 실제 실행 테스트: KR1만."
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install NHN Cloud CLI dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests python-dotenv
+
+      - name: Create temporary SSH key
+        id: ssh_key
+        run: |
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/nhn_temp_key -N "" -C "github-actions-temp"
+          echo "private_key_path=$HOME/.ssh/nhn_temp_key" >> $GITHUB_OUTPUT
+          echo "public_key_path=$HOME/.ssh/nhn_temp_key.pub" >> $GITHUB_OUTPUT
+          chmod 600 ~/.ssh/nhn_temp_key
+
+      - name: Create build instance on NHN Cloud
+        id: create_instance
+        env:
+          NHN_AUTH_URL: ${{ secrets.NHN_AUTH_URL }}
+          NHN_TENANT_ID: ${{ secrets.NHN_TENANT_ID }}
+          NHN_USERNAME: ${{ secrets.NHN_USERNAME }}
+          NHN_PASSWORD: ${{ secrets.NHN_PASSWORD }}
+          NHN_FLAVOR_NAME: ${{ secrets.NHN_FLAVOR_NAME }}
+          NHN_IMAGE_NAME: ${{ secrets.NHN_IMAGE_NAME }}
+          NHN_SECURITY_GROUP_ID: ${{ secrets.NHN_SECURITY_GROUP_ID }}
+          NHN_FLOATING_IP_POOL: ${{ secrets.NHN_FLOATING_IP_POOL }}
+          SSH_PUBLIC_KEY: ${{ steps.ssh_key.outputs.public_key_path }}
+        run: python3 scripts/ci/create_build_instance.py
+
+      - name: Wait for SSH to be ready
+        run: |
+          echo "⏳ SSH 서비스 준비 대기 중..."
+          max_attempts=30
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                -i ${{ steps.ssh_key.outputs.private_key_path }} \
+                ubuntu@${{ steps.create_instance.outputs.instance_ip }} \
+                "echo 'SSH 연결 성공'" 2>/dev/null; then
+              echo "✅ SSH 연결 가능"
+              break
+            fi
+            
+            attempt=$((attempt + 1))
+            echo "  시도 $attempt/$max_attempts..."
+            sleep 10
+          done
+          
+          if [ $attempt -eq $max_attempts ]; then
+            echo "❌ SSH 연결 실패"
+            exit 1
+          fi
+
+      - name: Prepare build environment
+        run: |
+          echo "📦 빌드 환경 설정 중..."
+          
+          # 환경 변수 파일 생성 (메트릭은 Prometheus가 /metrics 스크래핑)
+          cat > .env.build << EOF
+          LOKI_URL=${{ secrets.LOKI_URL }}
+          INSTANCE_IP=${{ steps.create_instance.outputs.instance_ip }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+          NHN_OBJECT_STORAGE_ENDPOINT=${{ secrets.NHN_OBJECT_STORAGE_ENDPOINT }}
+          NHN_OBJECT_STORAGE_ACCESS_KEY=${{ secrets.NHN_OBJECT_STORAGE_ACCESS_KEY }}
+          NHN_OBJECT_STORAGE_SECRET_KEY=${{ secrets.NHN_OBJECT_STORAGE_SECRET_KEY }}
+          NHN_CDN_DOMAIN=${{ secrets.NHN_CDN_DOMAIN }}
+          NHN_CDN_AUTH_KEY=${{ secrets.NHN_CDN_AUTH_KEY }}
+          EOF
+
+      - name: Upload source code to build instance
+        run: |
+          echo "📤 소스 코드 업로드 중..."
+          
+          # rsync로 소스 코드 전송
+          rsync -avz --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
+            --exclude='venv' --exclude='.env' --exclude='*.log' \
+            -e "ssh -o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}" \
+            ./ ubuntu@${{ steps.create_instance.outputs.instance_ip }}:/tmp/photo-api/
+          
+          # 환경 변수 파일 전송
+          scp -o StrictHostKeyChecking=no \
+            -i ${{ steps.ssh_key.outputs.private_key_path }} \
+            .env.build ubuntu@${{ steps.create_instance.outputs.instance_ip }}:/tmp/photo-api/.env
+          
+          echo "✅ 소스 코드 업로드 완료"
+
+      - name: Download dependencies offline
+        run: |
+          echo "📥 오프라인 의존성 패키지 다운로드 중..."
+          
+          # Python 패키지 다운로드
+          mkdir -p offline-packages
+          pip download -r requirements.txt -d offline-packages/
+          
+          # Promtail 바이너리 다운로드
+          echo "📥 Promtail 바이너리 다운로드 중..."
+          curl -sSL -o offline-packages/promtail.zip \
+            "https://github.com/grafana/loki/releases/download/v${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+          
+          echo "✅ 오프라인 패키지 다운로드 완료"
+
+      - name: Upload offline packages to build instance
+        run: |
+          echo "📤 오프라인 패키지 업로드 중..."
+          
+          rsync -avz \
+            -e "ssh -o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}" \
+            offline-packages/ ubuntu@${{ steps.create_instance.outputs.instance_ip }}:/tmp/offline-packages/
+          
+          echo "✅ 오프라인 패키지 업로드 완료"
+
+      - name: Build image on instance
+        run: |
+          echo "🔨 인스턴스 이미지 빌드 중..."
+          
+          ssh -o StrictHostKeyChecking=no \
+            -i ${{ steps.ssh_key.outputs.private_key_path }} \
+            ubuntu@${{ steps.create_instance.outputs.instance_ip }} << 'REMOTE_SCRIPT'
+          set -euo pipefail
+          
+          echo "=== 1단계: Python 설치 ==="
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            curl ca-certificates build-essential libffi-dev libssl-dev \
+            software-properties-common unzip
+          
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+          
+          echo "=== 2단계: Photo API 설정 ==="
+          sudo mkdir -p /opt/photo-api /var/log/photo-api
+          sudo rsync -a /tmp/photo-api/ /opt/photo-api/
+          sudo chmod 755 /var/log/photo-api
+          
+          # 전용 사용자 생성
+          sudo useradd -r -s /usr/sbin/nologin -d /opt/photo-api photo-api 2>/dev/null || true
+          
+          # Python 가상환경 및 오프라인 패키지 설치
+          python3.11 -m venv /opt/photo-api/venv
+          /opt/photo-api/venv/bin/pip install --upgrade pip --no-index --find-links=/tmp/offline-packages
+          /opt/photo-api/venv/bin/pip install --no-index --find-links=/tmp/offline-packages -r /opt/photo-api/requirements.txt
+          
+          # systemd 서비스 생성
+          sudo tee /etc/systemd/system/photo-api.service > /dev/null << 'SVC'
+          [Unit]
+          Description=Photo API
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=photo-api
+          Group=photo-api
+          WorkingDirectory=/opt/photo-api
+          Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+          EnvironmentFile=/opt/photo-api/.env
+          ExecStart=/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=photo-api
+          ReadWritePaths=/var/log/photo-api
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+          
+          sudo chown -R photo-api:photo-api /opt/photo-api /var/log/photo-api
+          
+          echo "=== 3단계: Promtail 설정 ==="
+          sudo mkdir -p /opt/promtail /var/lib/promtail
+          
+          # 오프라인 패키지에서 설치
+          unzip -q /tmp/offline-packages/promtail.zip -d /tmp/
+          sudo mv /tmp/promtail-linux-amd64 /opt/promtail/promtail 2>/dev/null || \
+            sudo mv /tmp/promtail /opt/promtail/promtail
+          sudo chmod +x /opt/promtail/promtail
+          
+          sudo cp /opt/photo-api/conf/promtail-config.yaml /opt/promtail/promtail-config.yaml
+          
+          # Promtail systemd 서비스
+          sudo tee /etc/systemd/system/promtail.service > /dev/null << 'EOF'
+          [Unit]
+          Description=Promtail
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile=/opt/photo-api/.env
+          ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          echo "=== systemd 서비스 활성화 ==="
+          sudo systemctl daemon-reload
+          sudo systemctl enable photo-api.service
+          sudo systemctl enable promtail.service
+          
+          echo "=== 정리 ==="
+          sudo rm -rf /tmp/photo-api /tmp/offline-packages
+          
+          echo "✅ 이미지 빌드 완료"
+          REMOTE_SCRIPT
+          
+          echo "✅ 인스턴스 빌드 완료"
+
+      - name: Start services and verify API before image creation
+        run: |
+          INSTANCE_IP="${{ steps.create_instance.outputs.instance_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}"
+          
+          echo "🔄 서비스 시작 중..."
+          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl start photo-api.service && sleep 8"
+          
+          echo "📋 서비스 상태 및 로그 (원인 파악용)"
+          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} << 'DIAG'
+            echo "=== photo-api.service status ==="
+            sudo systemctl status photo-api.service --no-pager || true
+            echo "=== journalctl -u photo-api -n 60 ==="
+            sudo journalctl -u photo-api -n 60 --no-pager || true
+            echo "=== 로컬에서 8000 포트 확인 ==="
+            curl -s -o /dev/null -w "localhost:8000/health → HTTP %{http_code}\n" http://127.0.0.1:8000/health || echo "localhost 연결 실패"
+          DIAG
+          
+          echo "🔍 빌드 인스턴스 API 헬스체크 (Floating IP:8000)..."
+          max_attempts=30
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${INSTANCE_IP}:8000/health" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "✅ API 정상 응답 (HTTP $code) — 이미지 생성 진행"
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+            echo "  시도 $attempt/$max_attempts: HTTP $code, 대기 중..."
+            sleep 10
+          done
+          
+          echo "❌ 이미지 생성 중단: http://${INSTANCE_IP}:8000/health 가 정상(200)이 아닙니다."
+          echo "📋 실패 시점 서비스 로그:"
+          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl status photo-api.service --no-pager || true; sudo journalctl -u photo-api -n 80 --no-pager || true"
+          exit 1
+
+      - name: Stop instance before creating image
+        env:
+          TOKEN: ${{ steps.create_instance.outputs.token }}
+          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
+          INSTANCE_ID: ${{ steps.create_instance.outputs.instance_id }}
+        run: python3 scripts/ci/stop_instance.py
+
+      - name: Create instance image
+        id: create_image
+        env:
+          TOKEN: ${{ steps.create_instance.outputs.token }}
+          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
+          VOLUME_URL: ${{ steps.create_instance.outputs.volume_url }}
+          INSTANCE_ID: ${{ steps.create_instance.outputs.instance_id }}
+          GIT_SHA: ${{ github.sha }}
+        run: python3 scripts/ci/create_image.py
+
+      - name: Create test instance from image (KR1만, 실제 실행 테스트)
+        id: test_instance
+        env:
+          TOKEN: ${{ steps.create_instance.outputs.token }}
+          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
+          IMAGE_ID: ${{ steps.create_image.outputs.image_id }}
+          NHN_FLAVOR_NAME: ${{ secrets.NHN_FLAVOR_NAME }}
+          NHN_SECURITY_GROUP_ID: ${{ secrets.NHN_SECURITY_GROUP_ID }}
+          NHN_FLOATING_IP_POOL: ${{ secrets.NHN_FLOATING_IP_POOL }}
+          KEYPAIR_NAME: ${{ steps.create_instance.outputs.keypair_name }}
+        run: python3 scripts/ci/create_test_instance.py
+
+      - name: Wait for test instance services
+        run: |
+          echo "⏳ 서비스 시작 대기 중..."
+          sleep 60  # systemd 서비스가 부팅 시 자동 시작되도록 대기
+
+      - name: Test image with curl (KR1만)
+        run: |
+          echo "🧪 이미지 테스트 중 (KR1, 실제 실행 테스트만)..."
+          
+          max_attempts=30
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            echo "  시도 $((attempt + 1))/$max_attempts: Health check..."
+            
+            if curl -f -s -o /dev/null -w "%{http_code}" \
+                http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/health | grep -q 200; then
+              echo "✅ Health check 성공"
+              
+              # API 정보 확인
+              echo "📊 API 정보:"
+              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/ | jq .
+              
+              # Metrics 확인
+              echo "📈 Prometheus 메트릭 확인:"
+              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/metrics | head -20
+              
+              echo "✅ 모든 테스트 통과"
+              exit 0
+            fi
+            
+            attempt=$((attempt + 1))
+            sleep 10
+          done
+          
+          echo "❌ Health check 실패"
+          
+          # 디버깅 정보 수집
+          echo "🔍 디버깅 정보 수집 중..."
+          ssh -o StrictHostKeyChecking=no \
+            -i ${{ steps.ssh_key.outputs.private_key_path }} \
+            ubuntu@${{ steps.test_instance.outputs.test_instance_ip }} << 'DEBUG'
+          echo "=== systemd 서비스 상태 ==="
+          sudo systemctl status photo-api.service --no-pager || true
+          echo "=== photo-api 로그 ==="
+          sudo journalctl -u photo-api.service -n 50 --no-pager || true
+          echo "=== 프로세스 확인 ==="
+          ps aux | grep -E 'uvicorn|python' || true
+          echo "=== 포트 확인 ==="
+          sudo netstat -tlnp | grep 8000 || true
+          DEBUG
+          
+          exit 1
+
+      - name: Upload image to KR2 (이미지 업로드만, 인스턴스 생성 없음)
+        id: upload_image_kr2
+        continue-on-error: true
+        env:
+          TOKEN: ${{ steps.create_instance.outputs.token }}
+          SOURCE_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR1 }}
+          SOURCE_IMAGE_ID: ${{ steps.create_image.outputs.image_id }}
+          SOURCE_IMAGE_NAME: ${{ steps.create_image.outputs.image_name }}
+          TARGET_REGION: KR2
+          TARGET_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR2 }}
+        run: python3 scripts/ci/copy_image_to_region.py
+
+      - name: Cleanup KR1 resources
+        if: always() && github.event.inputs.skip_cleanup != 'true'
+        env:
+          TOKEN: ${{ steps.create_instance.outputs.token }}
+          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
+          BUILD_INSTANCE_ID: ${{ steps.create_instance.outputs.instance_id }}
+          TEST_INSTANCE_ID: ${{ steps.test_instance.outputs.test_instance_id }}
+          BUILD_FLOATING_IP_ID: ${{ steps.create_instance.outputs.floating_ip_id }}
+          TEST_FLOATING_IP_ID: ${{ steps.test_instance.outputs.test_floating_ip_id }}
+          KEYPAIR_NAME: ${{ steps.create_instance.outputs.keypair_name }}
+        run: python3 scripts/ci/cleanup.py
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🎉 Build and create image (KR1, KR2) 요약" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 항목 | 값 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| 빌드·테스트 리전 | KR1 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 빌드 인스턴스 ID | ${{ steps.create_instance.outputs.instance_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 빌드 인스턴스 IP | ${{ steps.create_instance.outputs.instance_ip }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 이미지 이름 | ${{ steps.create_image.outputs.image_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| KR1 이미지 ID | ${{ steps.create_image.outputs.image_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| KR2 이미지 ID | ${{ steps.upload_image_kr2.outputs.target_image_id || '-' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 테스트 인스턴스 ID | ${{ steps.test_instance.outputs.test_instance_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 테스트 인스턴스 IP | ${{ steps.test_instance.outputs.test_instance_ip }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 이미지 정보" >> $GITHUB_STEP_SUMMARY
+          echo "- **이미지 이름**: ${{ steps.create_image.outputs.image_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **KR1 이미지 ID**: ${{ steps.create_image.outputs.image_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **KR2 이미지 ID**: ${{ steps.upload_image_kr2.outputs.target_image_id || '-' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **빌드 시간**: $(date -u)" >> $GITHUB_STEP_SUMMARY

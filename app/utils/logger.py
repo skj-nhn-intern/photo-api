@@ -1,11 +1,18 @@
 """
-운영 환경용 Python 로깅 설정.
+운영 환경용 Python 구조화된 로깅 설정.
 
-원칙:
-- INFO: 중요 비즈니스 이벤트 (가입, 업로드, 공유링크 생성)
-- WARNING: 클라이언트 오류 (잘못된 인증, 만료된 링크)
-- ERROR: 시스템 오류, 외부 서비스 실패
-- 개인정보 제외 (email, username 등은 로깅하지 않음)
+로그 레벨 전략:
+- ERROR: 즉시 대응 필요한 오류 (DB 연결 실패, 외부 API 장애)
+- WARN: 잠재적 문제, 곧 이슈가 될 수 있음 (재시도 발생, 임계치 근접)
+- INFO: 주요 비즈니스 이벤트 (주문 완료, 사용자 로그인)
+- DEBUG: 개발/디버깅용 상세 정보 (함수 진입/종료, 변수 값)
+
+구조화된 로깅:
+- JSON 형식의 구조화된 로그
+- 필수 필드: timestamp, level, service, message
+- 인프라 컨텍스트: host, instance_id, environment, region, version
+- 요청 컨텍스트: http_method, http_path, http_status, duration_ms, client_ip, user_agent
+- 오류 필드: error_type, error_message, stack_trace, error_code, retry_count, upstream_service
 
 로그 출력:
 - stdout: 사람이 읽기 쉬운 텍스트 (journald)
@@ -107,60 +114,346 @@ _STANDARD_ATTRS = frozenset(
 
 class JsonLinesFormatter(logging.Formatter):
     """
-    운영용 NDJSON 포맷터.
+    구조화된 로깅을 위한 NDJSON 포맷터.
     
-    출력 필드:
-    - ts: 타임스탬프
-    - level: 로그 레벨
-    - instance: 인스턴스 IP (멀티 인스턴스 식별)
-    - rid: Request ID (요청 추적)
-    - event: 이벤트 타입 (lifecycle, request, auth, photo, share, storage, cdn)
-    - msg: 메시지
-    - ctx: 추가 컨텍스트 (개인정보 제외)
-    - exc: 예외 정보 (에러 시)
+    필수 필드:
+    - timestamp: ISO 8601 UTC 타임스탬프
+    - level: 로그 심각도 (ERROR, WARN, INFO, DEBUG)
+    - service: 서비스/애플리케이션 이름
+    - message: 사람이 읽을 수 있는 설명
+    
+    인프라 컨텍스트:
+    - host: 서버 호스트명 또는 IP
+    - instance_id: 클라우드 인스턴스 ID
+    - environment: prod, staging, dev 등
+    - region: 배포 리전
+    - version: 애플리케이션 버전 또는 커밋 해시
+    
+    요청 컨텍스트:
+    - http_method: GET, POST 등
+    - http_path: 요청 경로 (개인정보 제외)
+    - http_status: 응답 상태 코드
+    - duration_ms: 처리 소요 시간
+    - client_ip: 클라이언트 IP
+    - user_agent: 브라우저/클라이언트 정보
+    - request_id: 요청 추적 ID
+    
+    오류 필드:
+    - error_type: 예외 클래스명 또는 에러 코드
+    - error_message: 오류 메시지
+    - stack_trace: 스택 트레이스 (별도 필드로 분리)
+    - error_code: 내부 정의 에러 코드
+    - retry_count: 재시도 횟수
+    - upstream_service: 오류 발생한 외부 서비스명
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        # UTC ISO8601 (Loki/Promtail 파싱용, 타임존 오차 방지)
         from datetime import datetime
+        
+        # UTC ISO8601 타임스탬프
         dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
         try:
             msecs = int(getattr(record, "msecs", 0) or 0) % 1000
         except (TypeError, ValueError):
             msecs = 0
-        ts_utc = dt.strftime("%Y-%m-%dT%H:%M:%S") + f".{msecs:03d}Z"
+        timestamp = dt.strftime("%Y-%m-%dT%H:%M:%S") + f".{msecs:03d}Z"
+        
+        # 필수 필드
         payload = {
-            "ts": ts_utc,
+            "timestamp": timestamp,
             "level": record.levelname,
-            "instance": INSTANCE_IP,
+            "service": settings.app_name,
+            "message": record.getMessage(),
         }
         
-        # Request ID (있으면 포함)
-        rid = get_request_id()
-        if rid:
-            payload["rid"] = rid
+        # 인프라 컨텍스트
+        payload["host"] = INSTANCE_IP
+        payload["instance_id"] = getattr(record, "instance_id", None) or INSTANCE_IP
+        payload["environment"] = settings.environment.value.lower()
+        payload["region"] = getattr(record, "region", None) or "kr1"
+        payload["version"] = getattr(record, "version", None) or settings.app_version
         
-        # event 필드 우선 배치
+        # 요청 컨텍스트
+        if getattr(record, "http_method", None):
+            payload["http_method"] = record.http_method
+        if getattr(record, "http_path", None):
+            payload["http_path"] = record.http_path
+        if getattr(record, "http_status", None):
+            payload["http_status"] = record.http_status
+        if getattr(record, "duration_ms", None) is not None:
+            payload["duration_ms"] = record.duration_ms
+        if getattr(record, "client_ip", None):
+            payload["client_ip"] = record.client_ip
+        if getattr(record, "user_agent", None):
+            payload["user_agent"] = record.user_agent
+        
+        # Request ID (요청 추적)
+        rid = getattr(record, "request_id", None) or get_request_id()
+        if rid:
+            payload["request_id"] = rid
+        
+        # 오류 필드
+        if record.exc_info:
+            exc_type, exc_value, exc_tb = record.exc_info
+            payload["error_type"] = exc_type.__name__ if exc_type else "Unknown"
+            payload["error_message"] = str(exc_value) if exc_value else ""
+            payload["stack_trace"] = self.formatException(record.exc_info)
+        
+        if getattr(record, "error_type", None):
+            payload["error_type"] = record.error_type
+        if getattr(record, "error_message", None):
+            payload["error_message"] = record.error_message
+        if getattr(record, "error_code", None):
+            payload["error_code"] = record.error_code
+        if getattr(record, "retry_count", None) is not None:
+            payload["retry_count"] = record.retry_count
+        if getattr(record, "upstream_service", None):
+            payload["upstream_service"] = record.upstream_service
+        
+        # 이벤트 타입 (기존 호환성)
         if getattr(record, "event", None):
             payload["event"] = record.event
         
-        payload["msg"] = record.getMessage()
-        
         # 추가 컨텍스트 (상위 필드·개인정보 제외)
-        _skip_in_ctx = _STANDARD_ATTRS | {"event", "instance"}  # 상위에 이미 있음
+        _skip_fields = _STANDARD_ATTRS | {
+            "event", "instance_id", "environment", "region", "version",
+            "http_method", "http_path", "http_status", "duration_ms",
+            "client_ip", "user_agent", "request_id",
+            "error_type", "error_message", "stack_trace", "error_code",
+            "retry_count", "upstream_service"
+        }
         extra_ctx = {
             k: v for k, v in record.__dict__.items()
-            if k not in _skip_in_ctx
+            if k not in _skip_fields
             and k not in _SENSITIVE_FIELDS
             and v is not None
         }
         if extra_ctx:
-            payload["ctx"] = extra_ctx
-        
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+            payload["context"] = extra_ctx
         
         return json.dumps(payload, ensure_ascii=False)
+
+
+def log_with_context(
+    level: int,
+    message: str,
+    *,
+    # 요청 컨텍스트
+    http_method: Optional[str] = None,
+    http_path: Optional[str] = None,
+    http_status: Optional[int] = None,
+    duration_ms: Optional[float] = None,
+    client_ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    request_id: Optional[str] = None,
+    # 오류 컨텍스트
+    error_type: Optional[str] = None,
+    error_message: Optional[str] = None,
+    error_code: Optional[str] = None,
+    retry_count: Optional[int] = None,
+    upstream_service: Optional[str] = None,
+    # 인프라 컨텍스트
+    region: Optional[str] = None,
+    version: Optional[str] = None,
+    instance_id: Optional[str] = None,
+    # 기타
+    event: Optional[str] = None,
+    exc_info: Optional[bool] = None,
+    **extra
+) -> None:
+    """
+    구조화된 로그를 남기는 헬퍼 함수.
+    
+    Args:
+        level: 로그 레벨 (logging.INFO, logging.ERROR 등)
+        message: 로그 메시지
+        http_method: HTTP 메서드 (GET, POST 등)
+        http_path: 요청 경로
+        http_status: HTTP 상태 코드
+        duration_ms: 처리 시간 (밀리초)
+        client_ip: 클라이언트 IP
+        user_agent: User-Agent
+        request_id: 요청 ID
+        error_type: 에러 타입
+        error_message: 에러 메시지
+        error_code: 내부 에러 코드
+        retry_count: 재시도 횟수
+        upstream_service: 외부 서비스명
+        region: 리전
+        version: 버전
+        instance_id: 인스턴스 ID
+        event: 이벤트 타입
+        exc_info: 예외 정보 포함 여부
+        **extra: 추가 컨텍스트
+    
+    Example:
+        log_with_context(
+            logging.INFO,
+            "User login successful",
+            http_method="POST",
+            http_path="/api/auth/login",
+            http_status=200,
+            duration_ms=123.45,
+            client_ip="192.168.1.1",
+            event="auth"
+        )
+    """
+    logger = logging.getLogger(__name__)
+    
+    extra_dict = {
+        "http_method": http_method,
+        "http_path": http_path,
+        "http_status": http_status,
+        "duration_ms": duration_ms,
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+        "request_id": request_id,
+        "error_type": error_type,
+        "error_message": error_message,
+        "error_code": error_code,
+        "retry_count": retry_count,
+        "upstream_service": upstream_service,
+        "region": region,
+        "version": version,
+        "instance_id": instance_id,
+        "event": event,
+        **extra
+    }
+    
+    # None 값 제거
+    extra_dict = {k: v for k, v in extra_dict.items() if v is not None}
+    
+    logger.log(level, message, extra=extra_dict, exc_info=exc_info)
+
+
+def log_error(
+    message: str,
+    *,
+    error_type: Optional[str] = None,
+    error_code: Optional[str] = None,
+    upstream_service: Optional[str] = None,
+    retry_count: Optional[int] = None,
+    exc_info: bool = True,
+    **extra
+) -> None:
+    """
+    에러 로그를 남기는 헬퍼 함수.
+    
+    Args:
+        message: 에러 메시지
+        error_type: 에러 타입 (예: DatabaseError, APIError)
+        error_code: 내부 에러 코드
+        upstream_service: 오류 발생한 외부 서비스명
+        retry_count: 재시도 횟수
+        exc_info: 예외 정보 포함 여부 (기본: True)
+        **extra: 추가 컨텍스트
+    
+    Example:
+        try:
+            db_connection.execute(query)
+        except Exception as e:
+            log_error(
+                "Database connection failed",
+                error_type="DatabaseError",
+                error_code="DB_001",
+                upstream_service="postgresql",
+                exc_info=True
+            )
+    """
+    log_with_context(
+        logging.ERROR,
+        message,
+        error_type=error_type,
+        error_code=error_code,
+        upstream_service=upstream_service,
+        retry_count=retry_count,
+        exc_info=exc_info,
+        **extra
+    )
+
+
+def log_warning(
+    message: str,
+    *,
+    retry_count: Optional[int] = None,
+    **extra
+) -> None:
+    """
+    경고 로그를 남기는 헬퍼 함수.
+    
+    Args:
+        message: 경고 메시지
+        retry_count: 재시도 횟수
+        **extra: 추가 컨텍스트
+    
+    Example:
+        log_warning(
+            "API rate limit approaching",
+            retry_count=3,
+            current_rate=950,
+            limit=1000
+        )
+    """
+    log_with_context(
+        logging.WARNING,
+        message,
+        retry_count=retry_count,
+        **extra
+    )
+
+
+def log_info(
+    message: str,
+    *,
+    event: Optional[str] = None,
+    **extra
+) -> None:
+    """
+    정보 로그를 남기는 헬퍼 함수. 주요 비즈니스 이벤트에 사용.
+    
+    Args:
+        message: 로그 메시지
+        event: 이벤트 타입 (예: user_login, photo_upload, order_complete)
+        **extra: 추가 컨텍스트
+    
+    Example:
+        log_info(
+            "User registration completed",
+            event="user_registration",
+            user_id=12345
+        )
+    """
+    log_with_context(
+        logging.INFO,
+        message,
+        event=event,
+        **extra
+    )
+
+
+def log_debug(
+    message: str,
+    **extra
+) -> None:
+    """
+    디버그 로그를 남기는 헬퍼 함수.
+    
+    Args:
+        message: 디버그 메시지
+        **extra: 추가 컨텍스트
+    
+    Example:
+        log_debug(
+            "Function entry",
+            function="process_image",
+            params={"width": 800, "height": 600}
+        )
+    """
+    log_with_context(
+        logging.DEBUG,
+        message,
+        **extra
+    )
 
 
 def setup_logging() -> None:

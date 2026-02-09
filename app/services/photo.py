@@ -2,17 +2,19 @@
 Photo service for managing photos.
 """
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models.photo import Photo
 from app.models.user import User
 from app.schemas.photo import PhotoCreate, PhotoUpdate, PhotoWithUrl
 from app.services.nhn_object_storage import get_storage_service
 from app.services.nhn_cdn import get_cdn_service
+from app.utils.security import create_image_access_token
 
 logger = logging.getLogger("app.photo")
 
@@ -208,15 +210,16 @@ class PhotoService:
     
     async def get_photo_with_url(self, photo: Photo) -> PhotoWithUrl:
         """
-        Get photo response with CDN URL.
-        
-        Args:
-            photo: Photo model
-            
-        Returns:
-            PhotoWithUrl schema with CDN URL
+        Get photo response with view URL.
+        If image_access_use_proxy: URL is backend proxy path with short-lived token.
+        Else: CDN URL with auth token (legacy; URL 유출 시 만료 전까지 제3자 열람 가능).
         """
-        cdn_url = await self.cdn.generate_auth_token_url(photo.storage_path)
+        settings = get_settings()
+        if settings.image_access_use_proxy:
+            token = create_image_access_token(photo.id)
+            url = f"/photos/{photo.id}/image?t={token}"
+        else:
+            url = await self.cdn.generate_auth_token_url(photo.storage_path)
         
         return PhotoWithUrl(
             id=photo.id,
@@ -229,7 +232,7 @@ class PhotoService:
             description=photo.description,
             created_at=photo.created_at,
             updated_at=photo.updated_at,
-            url=cdn_url,
+            url=url,
         )
     
     async def get_photos_with_urls(
@@ -246,3 +249,129 @@ class PhotoService:
             List of PhotoWithUrl schemas
         """
         return [await self.get_photo_with_url(photo) for photo in photos]
+    
+    async def prepare_photo_upload(
+        self,
+        user: User,
+        album_id: int,
+        filename: str,
+        content_type: str,
+        file_size: int,
+        metadata: Optional[PhotoCreate] = None,
+    ) -> Dict[str, any]:
+        """
+        Prepare a photo upload by generating presigned URL and creating photo record.
+        
+        Args:
+            user: Owner of the photo
+            album_id: Album ID to upload photo to
+            filename: Original filename
+            content_type: MIME type of the file
+            file_size: File size in bytes
+            metadata: Optional photo metadata
+            
+        Returns:
+            Dictionary with photo_id, upload_url, and object_key
+        """
+        # Generate unique filename for storage
+        file_ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+        unique_filename = f"{uuid.uuid4().hex}.{file_ext}" if file_ext else uuid.uuid4().hex
+        # Storage path: image/{album_id}/{filename}
+        storage_path = f"image/{album_id}/{unique_filename}"
+        
+        # Create photo record in database (pending upload)
+        photo = Photo(
+            owner_id=user.id,
+            filename=unique_filename,
+            original_filename=filename,
+            content_type=content_type,
+            file_size=file_size,
+            storage_path=storage_path,
+            title=metadata.title if metadata else None,
+            description=metadata.description if metadata else None,
+        )
+        
+        self.db.add(photo)
+        await self.db.flush()
+        await self.db.refresh(photo)
+        
+        # Generate presigned URL
+        try:
+            presigned_data = self.storage.generate_presigned_upload_url(
+                object_name=storage_path,
+                content_type=content_type,
+            )
+            
+            logger.info(
+                "Presigned URL generated",
+                extra={"event": "photo", "photo_id": photo.id, "user_id": user.id}
+            )
+            
+            return {
+                "photo_id": photo.id,
+                "upload_url": presigned_data["url"],
+                "upload_method": presigned_data["method"],
+                "upload_headers": presigned_data["headers"],
+                "object_key": storage_path,
+            }
+            
+        except Exception as e:
+            # If presigned URL generation fails, delete the photo record
+            await self.db.delete(photo)
+            await self.db.flush()
+            logger.error(
+                "Presigned URL generation failed",
+                exc_info=e,
+                extra={"event": "photo", "user_id": user.id},
+            )
+            raise ValueError("Presigned URL 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
+    
+    async def confirm_photo_upload(
+        self,
+        photo_id: int,
+        user_id: int,
+    ) -> Photo:
+        """
+        Confirm that a photo upload is complete by verifying the file exists in storage.
+        
+        Args:
+            photo_id: Photo ID to confirm
+            user_id: User ID (for ownership verification)
+            
+        Returns:
+            Confirmed Photo model
+            
+        Raises:
+            ValueError: If photo not found, not owned by user, or file doesn't exist
+        """
+        # Get photo from database
+        photo = await self.get_photo_by_id(photo_id, user_id)
+        if not photo:
+            raise ValueError("사진을 찾을 수 없거나 접근 권한이 없습니다.")
+        
+        # Verify file exists in storage
+        try:
+            file_exists = await self.storage.file_exists(photo.storage_path)
+            if not file_exists:
+                logger.error(
+                    "Photo upload verification failed - file not found",
+                    extra={"event": "photo", "photo_id": photo_id, "user_id": user_id}
+                )
+                raise ValueError("업로드된 파일을 찾을 수 없습니다. 업로드를 다시 시도해주세요.")
+            
+            logger.info(
+                "Photo upload confirmed",
+                extra={"event": "photo", "photo_id": photo_id, "user_id": user_id}
+            )
+            
+            return photo
+            
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(
+                "Photo upload verification failed",
+                exc_info=e,
+                extra={"event": "photo", "photo_id": photo_id, "user_id": user_id}
+            )
+            raise ValueError("파일 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")

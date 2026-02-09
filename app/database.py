@@ -32,17 +32,21 @@ settings = get_settings()
 # 느린 쿼리 임계값 (초)
 SLOW_QUERY_THRESHOLD = 1.0
 
+# CI/이미지 검증 시 DATABASE_URL이 비어 있을 수 있음 — 빈 값이면 SQLite 기본 사용
+_database_url = (settings.database_url or "").strip()
+if not _database_url:
+    _database_url = "sqlite+aiosqlite:///./photo_api.db"
 
 # Create async engine - echo는 항상 False (로그 노이즈 방지)
-if "sqlite" in settings.database_url:
+if "sqlite" in _database_url:
     engine = create_async_engine(
-        settings.database_url,
+        _database_url,
         echo=False,
         poolclass=NullPool,
     )
 else:
     engine = create_async_engine(
-        settings.database_url,
+        _database_url,
         echo=False,  # SQL 로그 비활성화
         poolclass=QueuePool,
         pool_size=5,
