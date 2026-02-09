@@ -382,6 +382,7 @@ jobs:
         continue-on-error: true
         env:
           TOKEN: ${{ steps.create_instance.outputs.token }}
+          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
           SOURCE_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR1 }}
           SOURCE_IMAGE_ID: ${{ steps.create_image.outputs.image_id }}
           SOURCE_IMAGE_NAME: ${{ steps.create_image.outputs.image_name }}

@@ -52,22 +52,37 @@ def main() -> None:
     source_name = os.environ.get("SOURCE_IMAGE_NAME", "").strip()
     target_region = os.environ.get("TARGET_REGION", "KR2").strip()
 
-    if not all([token, source_base, source_id, source_name]):
+    # 환경 변수 검증 및 디버깅 정보 출력
+    missing = []
+    if not token:
+        missing.append("TOKEN")
+    if not source_base:
+        missing.append("SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL")
+    if not source_id:
+        missing.append("SOURCE_IMAGE_ID")
+    if not source_name:
+        missing.append("SOURCE_IMAGE_NAME")
+    
+    if missing:
         print("❌ 필수 환경 변수가 설정되지 않았습니다.", file=sys.stderr)
         print("", file=sys.stderr)
-        print("필수 환경 변수:", file=sys.stderr)
-        print("  TOKEN: NHN Cloud 인증 토큰", file=sys.stderr)
-        print("  SOURCE_IMAGE_ID: KR1에서 생성한 이미지 ID (create_image.py의 출력)", file=sys.stderr)
-        print("  SOURCE_IMAGE_NAME: KR1에서 생성한 이미지 이름 (create_image.py의 출력)", file=sys.stderr)
-        print("  SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL: 소스 리전 Image API URL", file=sys.stderr)
+        print("누락된 환경 변수:", file=sys.stderr)
+        for var in missing:
+            print(f"  - {var}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("사용 예시:", file=sys.stderr)
-        print("  export TOKEN=\"your-token\"", file=sys.stderr)
-        print("  export SOURCE_IMAGE_BASE_URL=\"https://kr1-api-image-infrastructure.nhncloudservice.com\"", file=sys.stderr)
-        print("  export SOURCE_IMAGE_ID=\"0e83ed24-7d97-483d-b36a-bcc154543bae\"", file=sys.stderr)
-        print("  export SOURCE_IMAGE_NAME=\"photo-api-20250101-120000\"", file=sys.stderr)
-        print("  export TARGET_REGION=\"KR2\"  # 선택사항", file=sys.stderr)
-        print("  python3 scripts/ci/copy_image_to_region.py", file=sys.stderr)
+        print("현재 설정된 값 (디버깅용):", file=sys.stderr)
+        print(f"  TOKEN: {'설정됨' if token else '❌ 없음'} ({'***' if token else 'N/A'})", file=sys.stderr)
+        print(f"  SOURCE_IMAGE_BASE_URL: {os.environ.get('SOURCE_IMAGE_BASE_URL', '❌ 없음')}", file=sys.stderr)
+        print(f"  COMPUTE_URL: {os.environ.get('COMPUTE_URL', '❌ 없음')}", file=sys.stderr)
+        print(f"  SOURCE_IMAGE_ID: {os.environ.get('SOURCE_IMAGE_ID', '❌ 없음')}", file=sys.stderr)
+        print(f"  SOURCE_IMAGE_NAME: {os.environ.get('SOURCE_IMAGE_NAME', '❌ 없음')}", file=sys.stderr)
+        print(f"  추론된 source_base: {source_base if source_base else '❌ 없음'}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("GitHub Actions에서 실행하는 경우:", file=sys.stderr)
+        print("  - TOKEN: steps.create_instance.outputs.token에서 자동 전달", file=sys.stderr)
+        print("  - SOURCE_IMAGE_ID: steps.create_image.outputs.image_id에서 자동 전달", file=sys.stderr)
+        print("  - SOURCE_IMAGE_NAME: steps.create_image.outputs.image_name에서 자동 전달", file=sys.stderr)
+        print("  - SOURCE_IMAGE_BASE_URL: secrets.NHN_IMAGE_BASE_URL_KR1 또는 COMPUTE_URL 사용", file=sys.stderr)
         sys.exit(1)
 
     target_base = os.environ.get("TARGET_IMAGE_BASE_URL", "").strip()
