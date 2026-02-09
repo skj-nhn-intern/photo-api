@@ -2,10 +2,25 @@
 """
 KR1에서 생성한 이미지를 다른 리전(KR2 등) Image API로 복사.
 인스턴스는 생성하지 않고, Image API만 사용 (GET image file from source → POST+PUT to target).
-환경 변수: TOKEN, SOURCE_IMAGE_ID, SOURCE_IMAGE_NAME, TARGET_REGION
-  SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL(KR1) 중 하나 필요.
-  TARGET_IMAGE_BASE_URL: 타겟 리전 Image API 베이스 URL (시크릿 권장, 없으면 리전으로 추론).
-  COMPUTE_URL이 있으면 kr1-api-instance → kr1-api-image 로 추론.
+
+필수 환경 변수:
+  TOKEN: NHN Cloud 인증 토큰 (X-Auth-Token)
+  SOURCE_IMAGE_ID: KR1에서 생성한 이미지 ID (예: create_image.py의 출력)
+  SOURCE_IMAGE_NAME: KR1에서 생성한 이미지 이름 (예: create_image.py의 출력)
+  
+선택 환경 변수:
+  SOURCE_IMAGE_BASE_URL: 소스 리전 Image API URL (예: https://kr1-api-image-infrastructure.nhncloudservice.com)
+  COMPUTE_URL: 소스 리전 Compute API URL (있으면 Image API URL로 자동 추론)
+  TARGET_REGION: 타겟 리전 코드 (기본값: KR2)
+  TARGET_IMAGE_BASE_URL: 타겟 리전 Image API URL (없으면 TARGET_REGION으로 추론)
+
+사용 예시 (로컬 테스트):
+  export TOKEN="your-token"
+  export SOURCE_IMAGE_BASE_URL="https://kr1-api-image-infrastructure.nhncloudservice.com"
+  export SOURCE_IMAGE_ID="0e83ed24-7d97-483d-b36a-bcc154543bae"
+  export SOURCE_IMAGE_NAME="photo-api-20250101-120000"
+  export TARGET_REGION="KR2"
+  python3 scripts/ci/copy_image_to_region.py
 """
 import os
 import sys
@@ -38,7 +53,21 @@ def main() -> None:
     target_region = os.environ.get("TARGET_REGION", "KR2").strip()
 
     if not all([token, source_base, source_id, source_name]):
-        print("❌ TOKEN, (SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL), SOURCE_IMAGE_ID, SOURCE_IMAGE_NAME 필요", file=sys.stderr)
+        print("❌ 필수 환경 변수가 설정되지 않았습니다.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("필수 환경 변수:", file=sys.stderr)
+        print("  TOKEN: NHN Cloud 인증 토큰", file=sys.stderr)
+        print("  SOURCE_IMAGE_ID: KR1에서 생성한 이미지 ID (create_image.py의 출력)", file=sys.stderr)
+        print("  SOURCE_IMAGE_NAME: KR1에서 생성한 이미지 이름 (create_image.py의 출력)", file=sys.stderr)
+        print("  SOURCE_IMAGE_BASE_URL 또는 COMPUTE_URL: 소스 리전 Image API URL", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("사용 예시:", file=sys.stderr)
+        print("  export TOKEN=\"your-token\"", file=sys.stderr)
+        print("  export SOURCE_IMAGE_BASE_URL=\"https://kr1-api-image-infrastructure.nhncloudservice.com\"", file=sys.stderr)
+        print("  export SOURCE_IMAGE_ID=\"0e83ed24-7d97-483d-b36a-bcc154543bae\"", file=sys.stderr)
+        print("  export SOURCE_IMAGE_NAME=\"photo-api-20250101-120000\"", file=sys.stderr)
+        print("  export TARGET_REGION=\"KR2\"  # 선택사항", file=sys.stderr)
+        print("  python3 scripts/ci/copy_image_to_region.py", file=sys.stderr)
         sys.exit(1)
 
     target_base = os.environ.get("TARGET_IMAGE_BASE_URL", "").strip()
