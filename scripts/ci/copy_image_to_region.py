@@ -124,7 +124,16 @@ def main() -> None:
     owner = image_meta.get("owner")
     visibility = image_meta.get("visibility", "unknown")
     status = image_meta.get("status", "")
+    locations = image_meta.get("locations", [])
+    file_url = image_meta.get("file")  # 일부 OpenStack 구현에서 제공
     print(f"ℹ️  이미지 정보: owner={owner}, visibility={visibility}, status={status}")
+    if locations:
+        print(f"ℹ️  이미지 locations: {locations}")
+    if file_url:
+        print(f"ℹ️  이미지 file URL: {file_url}")
+    
+    # 참고: NHN Cloud 콘솔의 "다른 리전으로 복제" 기능은 API로 제공되지 않음
+    # 따라서 파일 다운로드/업로드 방식이 유일한 API 기반 솔루션
 
     # 1-1) 이미지가 active 상태가 될 때까지 대기 (파일 다운로드 전 필수)
     if status != "active":
@@ -157,23 +166,28 @@ def main() -> None:
     )
     if get_file.status_code == 403:
         print(f"❌ 이미지 파일 다운로드 권한 없음 (403 Forbidden)", file=sys.stderr)
+        print(f"   요청 URL: {get_file.url}", file=sys.stderr)
+        print(f"   응답 헤더: {dict(get_file.headers)}", file=sys.stderr)
+        print(f"   응답 본문: {get_file.text[:500] if get_file.text else '(empty)'}", file=sys.stderr)
         print(f"   원인 가능성:", file=sys.stderr)
         print(f"   1. 토큰에 Image API 파일 다운로드 권한이 없음", file=sys.stderr)
         print(f"   2. 이미지 소유자({owner})와 토큰 테넌트가 다름", file=sys.stderr)
         print(f"   3. 이미지가 private이고 공유되지 않음", file=sys.stderr)
+        print(f"   4. NHN Cloud에서 이미지 파일 다운로드가 제한됨 (콘솔에서만 복제 가능)", file=sys.stderr)
         print(f"   해결 방법:", file=sys.stderr)
-        print(f"   - NHN Cloud 콘솔에서 사용자에게 'member' 또는 'admin' 역할 부여", file=sys.stderr)
-        print(f"   - 또는 이미지를 'shared'로 설정하거나 다른 테넌트와 공유", file=sys.stderr)
+        print(f"   - NHN Cloud 콘솔에서 수동으로 리전 간 복제 수행", file=sys.stderr)
+        print(f"   - 또는 NHN Cloud 기술 지원에 API 기반 복제 기능 요청", file=sys.stderr)
         print(f"   - 또는 Compute API를 통해 이미지 내보내기 사용 (Nova export)", file=sys.stderr)
         sys.exit(1)
     get_file.raise_for_status()
 
     # 3) 타겟 리전에 이미지 생성 (메타데이터만)
+    # visibility를 shared로 설정하여 파일 다운로드 권한 문제 해결
     create_body = {
         "name": source_name,
         "container_format": container_format,
         "disk_format": disk_format,
-        "visibility": "private",
+        "visibility": "shared",
     }
     create = requests.post(
         f"{target_base}/v2/images",

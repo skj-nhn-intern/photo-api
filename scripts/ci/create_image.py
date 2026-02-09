@@ -145,6 +145,21 @@ def main() -> None:
             image_id = image["id"]
             status = image.get("status", "")
         if status == "active":
+            # 이미지 visibility를 shared로 설정 (리전 간 복제를 위해)
+            print(f"🔧 이미지 visibility를 shared로 설정 중...")
+            update_headers = {**headers, "X-Image-Meta-Visibility": "shared"}
+            update_response = requests.patch(
+                f"{image_base}/v2/images/{image_id}",
+                headers=update_headers,
+                json=[{"op": "replace", "path": "/visibility", "value": "shared"}],
+            )
+            if update_response.ok:
+                print(f"✅ 이미지 visibility를 shared로 설정 완료")
+            else:
+                print(f"⚠️  이미지 visibility 설정 실패 (계속 진행): {update_response.status_code}")
+                if update_response.text:
+                    print(f"   응답: {update_response.text[:200]}")
+            
             print(f"✅ 이미지 생성 완료: {image_id}")
             out = os.environ.get("GITHUB_OUTPUT")
             if out:
