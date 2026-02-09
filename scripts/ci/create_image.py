@@ -108,11 +108,29 @@ def main() -> None:
                 print(f"❌ 볼륨 업로드 API 응답: {up.status_code}", file=sys.stderr)
                 print(up.text[:500] if up.text else "", file=sys.stderr)
                 sys.exit(1)
+            
+            # 볼륨 업로드 응답에서 image_id 추출
+            print(f"🔍 볼륨 업로드 응답 확인 중...")
             try:
-                image_id = (up.json().get("image_id") or up.json().get("imageId") or "").strip()
-            except Exception:
-                print("❌ 볼륨 업로드 응답에서 image_id를 찾을 수 없습니다.", file=sys.stderr)
-                sys.exit(1)
+                up_data = up.json()
+                print(f"   응답 데이터: {up_data}")
+                # 다양한 응답 형식 지원
+                image_id = (
+                    up_data.get("os-volume_upload_image", {}).get("image_id") or
+                    up_data.get("image_id") or
+                    up_data.get("imageId") or
+                    (up_data.get("os-volume_upload_image") or {}).get("imageId") or
+                    ""
+                ).strip()
+                if image_id:
+                    print(f"✅ 볼륨 업로드로 이미지 생성 요청 완료: {image_id}")
+                else:
+                    print(f"⚠️  응답에서 image_id를 찾을 수 없음. 이름으로 조회 시도: {image_name}")
+            except Exception as e:
+                print(f"⚠️  볼륨 업로드 응답 파싱 실패: {e}", file=sys.stderr)
+                print(f"   응답 텍스트: {up.text[:500] if up.text else '(empty)'}", file=sys.stderr)
+                print(f"   이름으로 조회 시도: {image_name}")
+                image_id = None
         elif "block storage volume" in msg:
             print(f"❌ 이미지 생성 불가: 인스턴스가 block storage volume 루트입니다.", file=sys.stderr)
             print(f"   볼륨 업로드 API URL을 찾을 수 없습니다 (VOLUME_URL 또는 compute URL 추론 실패).", file=sys.stderr)
@@ -135,6 +153,7 @@ def main() -> None:
             image = r.json().get("image") or r.json()
             status = image.get("status", "")
         else:
+            # image_id가 없으면 이름으로 조회
             r = requests.get(
                 f"{image_base}/v2/images?name={image_name}",
                 headers=headers,
@@ -142,11 +161,16 @@ def main() -> None:
             r.raise_for_status()
             images = r.json().get("images", [])
             if not images:
+                print(f"  이미지 '{image_name}'을 찾을 수 없음, 대기 중...")
                 time.sleep(15)
                 continue
+            # 같은 이름의 이미지가 여러 개일 수 있으므로 최신 것 선택
+            images.sort(key=lambda img: img.get("created_at") or "", reverse=True)
             image = images[0]
             image_id = image["id"]
             status = image.get("status", "")
+            print(f"  이미지 발견: {image_id}, 상태: {status}")
+        # 상태별 처리
         if status == "active":
             # 이미지 visibility를 shared로 설정 (파일 다운로드 권한 문제 해결을 위해)
             # 참고: shared는 테넌트 간 공유용이며, 리전 간 복제와는 무관
@@ -171,10 +195,21 @@ def main() -> None:
                     f.write(f"image_id={image_id}\n")
                     f.write(f"image_name={image_name}\n")
             return
-        print(f"  상태: {status}, 대기 중...")
+        # queued 상태가 너무 오래 지속되면 에러 출력
+        if status == "queued":
+            elapsed = int(time.time() - start)
+            if elapsed > 300:  # 5분 이상 queued 상태면 경고
+                print(f"⚠️  이미지가 {elapsed}초 동안 queued 상태입니다. 계속 대기 중...")
+        else:
+            print(f"  상태: {status}, 대기 중...")
         time.sleep(15)
 
     print("❌ 타임아웃: 이미지가 생성되지 않았습니다", file=sys.stderr)
+    if image_id:
+        print(f"   최종 이미지 ID: {image_id}", file=sys.stderr)
+        print(f"   최종 상태: {status}", file=sys.stderr)
+    else:
+        print(f"   이미지 이름: {image_name}", file=sys.stderr)
     sys.exit(1)
 
 
