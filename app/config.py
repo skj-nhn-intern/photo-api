@@ -133,7 +133,16 @@ class Settings(BaseSettings):
         default=30,
         description="Pushgateway로 메트릭 전송 주기(초). prometheus_pushgateway_url 설정 시에만 사용.",
     )
-    
+
+    @field_validator("prometheus_push_interval_seconds", mode="before")
+    @classmethod
+    def coerce_push_interval(cls, v: object) -> int:
+        if v is None or v == "":
+            return 30
+        if isinstance(v, str):
+            return int(v)
+        return int(v)
+
     # 인스턴스 식별용 사설 IP (로그·메트릭용). 비우면 자동 감지(ip addr), 오토스케일 시 서버마다 다름
     instance_ip: str = Field(default="", description="서버 사설 IP (비우면 자동 감지)")
     
