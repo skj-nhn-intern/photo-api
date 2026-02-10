@@ -121,8 +121,8 @@ def push_metrics_to_gateway() -> None:
     try:
         # pushadd_to_gateway uses POST; push_to_gateway uses PUT (some gateways/proxies return 501 for PUT)
         pushadd_to_gateway(url, job=job, registry=REGISTRY, grouping_key=grouping_key)
-        except Exception as e:
-            logger.warning("Pushgateway push failed: %s", e, exc_info=False)
+    except Exception as e:
+        logger.warning("Pushgateway push failed: %s", e, exc_info=False)
 
 
 async def push_node_exporter_to_gateway() -> None:
