@@ -15,7 +15,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from prometheus_client import REGISTRY, Counter, Gauge, Histogram, push_to_gateway
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, pushadd_to_gateway
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -117,7 +117,8 @@ def push_metrics_to_gateway() -> None:
     job = "photo-api"
     grouping_key = {"instance": settings.instance_ip or _node_identity()}
     try:
-        push_to_gateway(url, job=job, registry=REGISTRY, grouping_key=grouping_key)
+        # pushadd_to_gateway uses POST; push_to_gateway uses PUT (some gateways/proxies return 501 for PUT)
+        pushadd_to_gateway(url, job=job, registry=REGISTRY, grouping_key=grouping_key)
     except Exception as e:
         logger.warning("Pushgateway push failed: %s", e, exc_info=False)
 
