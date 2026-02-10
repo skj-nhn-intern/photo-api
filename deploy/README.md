@@ -38,7 +38,7 @@
 1. **환경 변수를 export 한 뒤 실행 (권장)**  
    NHN Deploy가 User Command 실행 시 환경 변수를 주입하면, 그대로 export 되어 있으므로 인자 없이 실행하면 됨.  
    - `apply-env-and-restart.sh`  
-   → 현재 셸에 **export** 된 변수 중 `DATABASE_URL`, `JWT_SECRET_KEY`, `NHN_*`, `LOKI_URL` 등 앱에서 쓰는 이름만 골라 `/opt/photo-api/.env`에 쓰고 서비스 재시작.
+   → 현재 셸에 **export** 된 변수만 .env에 반영합니다. **이번에 넘기지 않은 변수는 기존 .env 값을 유지**하므로, 배포 시 일부 변수만 넘겨도 LOKI_URL 등은 지워지지 않습니다.
 
 2. **.env 내용을 stdin으로 넘기는 경우**  
    - `apply-env-and-restart.sh --stdin`  
@@ -64,19 +64,36 @@
 
 로그 경로: **앱** → `/var/log/photo-api/app.log`, `error.log` → **Promtail** → **Loki**. 아래 순서로 확인하세요.
 
-1. **LOKI_URL이 .env에 있는지**  
+### Promtail 서비스가 아예 안 뜰 때
+
+1. **unit 파일이 서버에 반영됐는지**  
+   예전에 "LOKI_URL 비어 있으면 기동 스킵"하는 unit이 있으면, 비어 있을 때 Promtail이 바로 exit 0 해서 서비스가 안 떠 있을 수 있습니다.  
+   **조치**: 저장소의 `conf/promtail.service`(스킵 없음)를 서버에 복사한 뒤 재시작하세요.
+   ```bash
+   sudo cp /opt/photo-api/conf/promtail.service /etc/systemd/system/promtail.service
+   sudo systemctl daemon-reload
+   sudo systemctl restart promtail
+   sudo systemctl status promtail
+   ```
+2. **바이너리·설정 존재 여부**  
+   `test -x /opt/promtail/promtail && test -f /opt/promtail/promtail-config.yaml && echo OK`  
+   없으면 이미지 빌드/설치 단계에서 Promtail 설치가 빠진 것입니다.
+
+### 로그는 쓰이는데 Loki에만 안 보일 때
+
+3. **LOKI_URL이 .env에 있는지**  
    `sudo grep LOKI_URL /opt/photo-api/.env`  
    비어 있거나 없으면 배포 시나리오에 `LOKI_URL=http://loki서버:3100` 넣고 배포(또는 `apply-env-and-restart.sh`) 실행.
 
-2. **Promtail 기동 여부**  
+4. **Promtail 기동 여부**  
    `sudo systemctl status promtail`  
    inactive면 `sudo systemctl start promtail`. `.env`를 수정했다면 `sudo systemctl restart promtail` 로 재시작해야 새 LOKI_URL을 읽습니다.
 
-3. **앱이 로그 파일을 쓰는지**  
+5. **앱이 로그 파일을 쓰는지**  
    `ls -la /var/log/photo-api/`  
    `app.log` 크기가 늘어나는지 확인. 권한 문제면 `sudo chown -R photo-api:photo-api /var/log/photo-api` 등으로 조정.
 
-4. **배포 후에는 반드시 Promtail 재시작**  
+6. **배포 후에는 반드시 Promtail 재시작**  
    `apply-env-and-restart.sh`는 `.env` 반영 후 `promtail`도 재시작하므로, 배포 한 번이면 LOKI_URL이 적용됩니다.
 
 ## 리포지터리에 스크립트 두기

@@ -28,9 +28,10 @@ PROMETHEUS_PUSH_INTERVAL_SECONDS=30
 
 ### 2. 동작
 
-- 앱 기동 시 `PROMETHEUS_PUSHGATEWAY_URL` 이 있으면 백그라운드에서 **주기적으로** 현재 메트릭을 Pushgateway로 푸시합니다.
-- 푸시 시 사용하는 job 이름: `photo-api`
-- grouping key: `instance` = `INSTANCE_IP` 또는 호스트명
+- 앱 기동 시 `PROMETHEUS_PUSHGATEWAY_URL` 이 있으면 백그라운드에서 **주기적으로** 다음을 Pushgateway로 푸시합니다.
+  - **앱 메트릭**: job=`photo-api`, instance=INSTANCE_IP
+  - **node_exporter**: 같은 주기로 `127.0.0.1:9100/metrics` 를 읽어 job=`node_exporter`, instance=INSTANCE_IP 로 푸시 (동일 인스턴스에 node_exporter가 떠 있을 때)
+- Prometheus는 **Pushgateway만 스크래핑**하면 앱 메트릭과 호스트(CPU/메모리 등) 메트릭을 함께 수집할 수 있습니다.
 
 ### 3. Prometheus 설정 예시
 

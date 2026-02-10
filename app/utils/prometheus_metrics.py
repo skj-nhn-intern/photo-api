@@ -14,7 +14,9 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from urllib.parse import quote
 
+import httpx
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, pushadd_to_gateway
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -119,8 +121,33 @@ def push_metrics_to_gateway() -> None:
     try:
         # pushadd_to_gateway uses POST; push_to_gateway uses PUT (some gateways/proxies return 501 for PUT)
         pushadd_to_gateway(url, job=job, registry=REGISTRY, grouping_key=grouping_key)
+        except Exception as e:
+            logger.warning("Pushgateway push failed: %s", e, exc_info=False)
+
+
+async def push_node_exporter_to_gateway() -> None:
+    """
+    node_exporter(127.0.0.1:9100) 메트릭을 읽어 Pushgateway로 전송.
+    Pushgateway만 스크래핑해도 앱 + 호스트 메트릭을 함께 볼 수 있음.
+    """
+    settings = get_settings()
+    base = (settings.prometheus_pushgateway_url or "").strip().rstrip("/")
+    if not base:
+        return
+    instance = (settings.instance_ip or _node_identity()).strip() or "unknown"
+    path = f"/metrics/job/node_exporter/instance/{quote(instance, safe='')}"
+    url = f"{base}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get("http://127.0.0.1:9100/metrics")
+            r.raise_for_status()
+            body = r.text
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.post(url, content=body, headers={"Content-Type": "text/plain; charset=utf-8"})
+    except httpx.ConnectError:
+        logger.debug("node_exporter push skip: 127.0.0.1:9100 unreachable (not running?)")
     except Exception as e:
-        logger.warning("Pushgateway push failed: %s", e, exc_info=False)
+        logger.debug("node_exporter push failed: %s", e)
 
 
 async def pushgateway_loop() -> None:
@@ -145,6 +172,7 @@ async def pushgateway_loop() -> None:
         await asyncio.sleep(interval)
         try:
             await loop.run_in_executor(None, push_metrics_to_gateway)
+            await push_node_exporter_to_gateway()
         except asyncio.CancelledError:
             break
         except Exception as e:
