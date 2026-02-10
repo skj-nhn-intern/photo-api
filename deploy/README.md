@@ -21,6 +21,7 @@
 | 순서 | 태스크 유형 | 설명 |
 |------|-------------|------|
 | 1 | **User Command** | `deploy/apply-env-and-restart.sh` 실행. Deploy에서 설정한 환경 변수를 export 한 뒤 실행 (아래 사용법 참고) |
+| 2 | **User Command** (선택) | `deploy/verify-after-deploy.sh` 실행. 배포 후 서비스·헬스·API 응답 검증 |
 
 - **Run As**: 서버에서 `photo-api` 서비스 제어 권한이 있는 계정(예: `root`).
 - **Timeout**: 1~2분 정도.
@@ -41,6 +42,18 @@
 2. **.env 내용을 stdin으로 넘기는 경우**  
    - `apply-env-and-restart.sh --stdin`  
    → 표준입력 내용을 `/opt/photo-api/.env`로 저장 후 재시작.
+
+## 배포 후 검증 (verify-after-deploy.sh)
+
+배포 직후 서비스가 정상 기동했는지 확인하려면 `verify-after-deploy.sh`를 실행합니다.
+
+- **같은 서버에서**: `sudo /opt/photo-api/deploy/verify-after-deploy.sh`
+- **원격에서**: `BASE_URL=http://서버IP:8000 ./verify-after-deploy.sh`
+
+검증 항목: systemd 서비스 active 여부, `GET /health` → 200 + `"healthy"`, `GET /` 응답, `GET /metrics` (선택).  
+실패 시 exit code 1을 반환하므로 Deploy 시나리오에서 “검증 실패 시 배포 실패”로 이어지게 할 수 있습니다.
+
+환경 변수: `SERVICE_NAME`(기본 `photo-api`), `BASE_URL`(기본 `http://127.0.0.1:8000`), `MAX_WAIT`(기본 30초), `CURL_TIMEOUT`(기본 10초).
 
 ## 리포지터리에 스크립트 두기
 

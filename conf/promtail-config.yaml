@@ -33,7 +33,7 @@ scrape_configs:
     pipeline_stages:
       - json:
           expressions:
-            timestamp: ts
+            timestamp: timestamp
       - timestamp:
           source: timestamp
           format: "2006-01-02T15:04:05.000Z"
@@ -51,7 +51,7 @@ scrape_configs:
     pipeline_stages:
       - json:
           expressions:
-            timestamp: ts
+            timestamp: timestamp
       - timestamp:
           source: timestamp
           format: "2006-01-02T15:04:05.000Z"

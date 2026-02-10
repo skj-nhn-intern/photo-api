@@ -51,7 +51,8 @@ export DATABASE_URL="${DATABASE_URL:-}"
 export JWT_SECRET_KEY="${JWT_SECRET_KEY:-}"
 export JWT_ALGORITHM="${JWT_ALGORITHM:-}"
 export ACCESS_TOKEN_EXPIRE_MINUTES="${ACCESS_TOKEN_EXPIRE_MINUTES:-}"
-export INSTANCE_IP="${INSTANCE_IP:-}"
+# 인스턴스 IP: 미설정 시 hostname -I 첫 번째 주소 사용
+export INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 export LOKI_URL="${LOKI_URL:-}"
 export PROMETHEUS_PUSHGATEWAY_URL="${PROMETHEUS_PUSHGATEWAY_URL:-}"
 export PROMETHEUS_PUSH_INTERVAL_SECONDS="${PROMETHEUS_PUSH_INTERVAL_SECONDS:-}"
@@ -112,3 +113,9 @@ fi
 sudo systemctl restart "$SERVICE_NAME"
 echo "Restarted $SERVICE_NAME"
 sudo systemctl status "$SERVICE_NAME" --no-pager || true
+
+# Promtail은 /opt/photo-api/.env(LOKI_URL, INSTANCE_IP)를 사용하므로 .env 변경 후 재시작
+if systemctl list-unit-files --full promtail.service 2>/dev/null | grep -q promtail.service; then
+  sudo systemctl restart promtail
+  echo "Restarted promtail (LOKI_URL/INSTANCE_IP 반영)"
+fi
