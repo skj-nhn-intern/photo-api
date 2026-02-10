@@ -8,8 +8,8 @@ Type=simple
 EnvironmentFile=/opt/photo-api/.env
 ExecStartPre=/bin/sh -c 'test -x /opt/promtail/promtail || { echo "Promtail: binary not found or not executable"; exit 1; }'
 ExecStartPre=/bin/sh -c 'test -f /opt/promtail/promtail-config.yaml || { echo "Promtail: config not found"; exit 1; }'
-# LOKI_URL 비어 있으면 기동하지 않음 → "unsupported protocol scheme" 스팸 방지. 배포로 .env 에 LOKI_URL 넣고 restart 하면 정상 기동.
-ExecStart=/bin/sh -c 'test -n "${LOKI_URL}" || { echo "Promtail: LOKI_URL not set, skipping (set in .env and systemctl restart promtail)"; exit 0; }; exec /opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true'
+# 셸에서 .env 를 명시적으로 로드 후 LOKI_URL 확인 (systemd EnvironmentFile 타이밍 이슈 방지)
+ExecStart=/bin/sh -c 'set -a; [ -r /opt/photo-api/.env ] && . /opt/photo-api/.env; set +a; test -n "${LOKI_URL}" || { echo "Promtail: LOKI_URL not set, skipping"; exit 0; }; exec /opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true'
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5
