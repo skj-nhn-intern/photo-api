@@ -10,7 +10,7 @@
 구조화된 로깅:
 - JSON 형식의 구조화된 로그
 - 필수 필드: timestamp, level, service, message
-- 인프라 컨텍스트: host, instance_id, environment, region, version
+- 인프라 컨텍스트: host, instance_ip, environment, region, version
 - 요청 컨텍스트: http_method, http_path, http_status, duration_ms, client_ip, user_agent
 - 오류 필드: error_type, error_message, stack_trace, error_code, retry_count, upstream_service
 
@@ -124,7 +124,7 @@ class JsonLinesFormatter(logging.Formatter):
     
     인프라 컨텍스트:
     - host: 서버 호스트명 또는 IP
-    - instance_id: 클라우드 인스턴스 ID
+    - instance_ip: 인스턴스 IP (라벨 필터링용)
     - environment: prod, staging, dev 등
     - region: 배포 리전
     - version: 애플리케이션 버전 또는 커밋 해시
@@ -150,13 +150,28 @@ class JsonLinesFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         from datetime import datetime
         
-        # UTC ISO8601 타임스탬프
-        dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        # 로그 타임스탬프: log_timezone(기본 Asia/Seoul) 또는 UTC. ISO8601 + 오프셋
         try:
             msecs = int(getattr(record, "msecs", 0) or 0) % 1000
         except (TypeError, ValueError):
             msecs = 0
-        timestamp = dt.strftime("%Y-%m-%dT%H:%M:%S") + f".{msecs:03d}Z"
+        tz_name = (getattr(settings, "log_timezone", None) or "").strip()
+        if tz_name:
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = timezone.utc
+        else:
+            tz = timezone.utc
+        dt = datetime.fromtimestamp(record.created, tz=tz)
+        # RFC3339 형식 (Promtail format "2006-01-02T15:04:05.000Z07:00" 로 파싱)
+        offset = dt.strftime("%z")
+        if offset in ("", "+0000", "-0000"):
+            suffix = "Z"
+        else:
+            suffix = f"{offset[:3]}:{offset[3:]}"
+        timestamp = dt.strftime("%Y-%m-%dT%H:%M:%S") + f".{msecs:03d}{suffix}"
         
         # 필수 필드
         payload = {
@@ -168,7 +183,7 @@ class JsonLinesFormatter(logging.Formatter):
         
         # 인프라 컨텍스트
         payload["host"] = INSTANCE_IP
-        payload["instance_id"] = getattr(record, "instance_id", None) or INSTANCE_IP
+        payload["instance_ip"] = getattr(record, "instance_ip", None) or INSTANCE_IP
         payload["environment"] = settings.environment.value.lower()
         payload["region"] = getattr(record, "region", None) or "kr1"
         payload["version"] = getattr(record, "version", None) or settings.app_version
@@ -216,7 +231,7 @@ class JsonLinesFormatter(logging.Formatter):
         
         # 추가 컨텍스트 (상위 필드·개인정보 제외)
         _skip_fields = _STANDARD_ATTRS | {
-            "event", "instance_id", "environment", "region", "version",
+            "event", "instance_ip", "environment", "region", "version",
             "http_method", "http_path", "http_status", "duration_ms",
             "client_ip", "user_agent", "request_id",
             "error_type", "error_message", "stack_trace", "error_code",
@@ -255,7 +270,7 @@ def log_with_context(
     # 인프라 컨텍스트
     region: Optional[str] = None,
     version: Optional[str] = None,
-    instance_id: Optional[str] = None,
+    instance_ip: Optional[str] = None,
     # 기타
     event: Optional[str] = None,
     exc_info: Optional[bool] = None,
@@ -281,7 +296,7 @@ def log_with_context(
         upstream_service: 외부 서비스명
         region: 리전
         version: 버전
-        instance_id: 인스턴스 ID
+        instance_ip: 인스턴스 IP (라벨 필터링용)
         event: 이벤트 타입
         exc_info: 예외 정보 포함 여부
         **extra: 추가 컨텍스트
@@ -315,7 +330,7 @@ def log_with_context(
         "upstream_service": upstream_service,
         "region": region,
         "version": version,
-        "instance_id": instance_id,
+        "instance_ip": instance_ip,
         "event": event,
         **extra
     }

@@ -34,9 +34,16 @@ scrape_configs:
       - json:
           expressions:
             timestamp: timestamp
+            instance_ip: instance_ip
+            host: host
+      - template:
+          source: instance_ip
+          template: '{{ or .instance_ip .host }}'
+      - labels:
+          instance_ip: instance_ip
       - timestamp:
           source: timestamp
-          format: "2006-01-02T15:04:05.000Z"
+          format: "2006-01-02T15:04:05.000Z07:00"
 
   - job_name: photo-api-errors
     static_configs:
@@ -52,9 +59,16 @@ scrape_configs:
       - json:
           expressions:
             timestamp: timestamp
+            instance_ip: instance_ip
+            host: host
+      - template:
+          source: instance_ip
+          template: '{{ or .instance_ip .host }}'
+      - labels:
+          instance_ip: instance_ip
       - timestamp:
           source: timestamp
-          format: "2006-01-02T15:04:05.000Z"
+          format: "2006-01-02T15:04:05.000Z07:00"
 
   - job_name: journal
     journal:

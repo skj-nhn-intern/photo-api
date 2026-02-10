@@ -145,6 +145,9 @@ class Settings(BaseSettings):
 
     # 인스턴스 식별용 사설 IP (로그·메트릭용). 비우면 자동 감지(ip addr), 오토스케일 시 서버마다 다름
     instance_ip: str = Field(default="", description="서버 사설 IP (비우면 자동 감지)")
+
+    # 로그 타임스탬프 타임존 (IANA, 예: Asia/Seoul). 비우면 UTC
+    log_timezone: str = Field(default="Asia/Seoul", description="로그 timestamp 타임존 (IANA). 빈 문자열이면 UTC")
     
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
