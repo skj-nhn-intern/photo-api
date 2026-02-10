@@ -11,7 +11,8 @@
 
 1. **환경 변수 설정**  
    Deploy 콘솔의 **시나리오/서버 그룹**에서 리전별 환경 변수 설정  
-   (예: `DATABASE_URL`, `JWT_SECRET_KEY`, `NHN_OBJECT_STORAGE_*`, `NHN_CDN_*` 등)
+   (예: `DATABASE_URL`, `JWT_SECRET_KEY`, `LOKI_URL`, `NHN_OBJECT_STORAGE_*`, `NHN_CDN_*` 등)  
+   **Loki 로그 전송**: 배포 시나리오/서버 그룹 환경 변수에 `LOKI_URL`(예: `http://loki서버:3100`)을 **반드시** 넣어 주세요. 비어 있으면 Promtail이 `unsupported protocol scheme ""` 를 로그에 남기고, 재시작 시 `.env`에 반영된 값으로 정상 동작합니다.
 2. **배포 시 실행할 스크립트**  
    이 디렉터리의 `apply-env-and-restart.sh`를 **User Command** 태스크로 실행해,  
    위에서 설정한 값을 `/opt/photo-api/.env`에 쓰고 `photo-api.service`를 재시작.
@@ -58,6 +59,25 @@
 실패 시 exit code 1을 반환하므로 Deploy 시나리오에서 “검증 실패 시 배포 실패”로 이어지게 할 수 있습니다.
 
 환경 변수: `SERVICE_NAME`(기본 `photo-api`), `BASE_URL`(기본 `http://127.0.0.1:8000`), `MAX_WAIT`(기본 30초), `CURL_TIMEOUT`(기본 10초).
+
+## Loki에 로그가 안 보일 때
+
+로그 경로: **앱** → `/var/log/photo-api/app.log`, `error.log` → **Promtail** → **Loki**. 아래 순서로 확인하세요.
+
+1. **LOKI_URL이 .env에 있는지**  
+   `sudo grep LOKI_URL /opt/photo-api/.env`  
+   비어 있거나 없으면 배포 시나리오에 `LOKI_URL=http://loki서버:3100` 넣고 배포(또는 `apply-env-and-restart.sh`) 실행.
+
+2. **Promtail 기동 여부**  
+   `sudo systemctl status promtail`  
+   inactive면 `sudo systemctl start promtail`. `.env`를 수정했다면 `sudo systemctl restart promtail` 로 재시작해야 새 LOKI_URL을 읽습니다.
+
+3. **앱이 로그 파일을 쓰는지**  
+   `ls -la /var/log/photo-api/`  
+   `app.log` 크기가 늘어나는지 확인. 권한 문제면 `sudo chown -R photo-api:photo-api /var/log/photo-api` 등으로 조정.
+
+4. **배포 후에는 반드시 Promtail 재시작**  
+   `apply-env-and-restart.sh`는 `.env` 반영 후 `promtail`도 재시작하므로, 배포 한 번이면 LOKI_URL이 적용됩니다.
 
 ## 리포지터리에 스크립트 두기
 
