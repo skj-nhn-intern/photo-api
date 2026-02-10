@@ -45,22 +45,18 @@ echo "[3/4] 설정 파일 복사..."
 cp "$CONF_SOURCE" "$PROMTAIL_HOME/promtail-config.yaml"
 
 echo "[4/4] systemd 서비스 설치..."
-cat > /etc/systemd/system/promtail.service << 'EOF'
-[Unit]
-Description=Promtail
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/opt/photo-api/.env
-ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+SVC_SOURCE=""
+for cand in "$SCRIPT_DIR/../conf/promtail.service" "/opt/photo-api/conf/promtail.service"; do
+  if [[ -f "$cand" ]]; then
+    SVC_SOURCE="$cand"
+    break
+  fi
+done
+if [[ -z "$SVC_SOURCE" ]]; then
+  echo "오류: conf/promtail.service를 찾을 수 없습니다." >&2
+  exit 1
+fi
+sudo cp "$SVC_SOURCE" /etc/systemd/system/promtail.service
 
 systemctl daemon-reload
 systemctl enable promtail.service

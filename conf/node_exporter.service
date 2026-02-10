@@ -1,0 +1,15 @@
+[Unit]
+Description=Prometheus Node Exporter (host metrics)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=node-exporter
+Group=node-exporter
+ExecStart=/opt/node_exporter/node_exporter --web.listen-address=:9100
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

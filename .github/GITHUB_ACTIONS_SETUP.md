@@ -42,8 +42,10 @@ GitHub 저장소 **Settings > Secrets and variables > Actions > Repository secre
 | 16 | `NHN_OBJECT_STORAGE_SECRET_KEY` | Object Storage Secret Key | ✅ |
 | 17 | `NHN_CDN_DOMAIN` | CDN 도메인 (없으면 빈 값 가능) | 선택 |
 | 18 | `NHN_CDN_AUTH_KEY` | CDN 인증 키 (없으면 빈 값 가능) | 선택 |
+| 19 | `PROMETHEUS_PUSHGATEWAY_URL` | Pushgateway URL (커스텀 메트릭 푸시, 없으면 빈 값) | 선택 |
+| 20 | `PROMETHEUS_PUSH_INTERVAL_SECONDS` | Pushgateway 푸시 주기(초, 기본 30) | 선택 |
 
-**총 15~18개.** GitHub 호스트 러너는 VPC 밖이므로, 빌드/테스트 인스턴스에 **Floating IP**를 자동 할당합니다. 풀 이름을 지정하지 않으면 사용 가능한 풀을 자동으로 선택하며, 정리 시 IP를 해제합니다. CDN 미사용 시 16·17은 빈 문자열로 두거나 비워둬도 됩니다 (앱이 비어 있으면 미사용 처리하는 경우).
+**총 15~20개.** GitHub 호스트 러너는 VPC 밖이므로, 빌드/테스트 인스턴스에 **Floating IP**를 자동 할당합니다. 풀 이름을 지정하지 않으면 사용 가능한 풀을 자동으로 선택하며, 정리 시 IP를 해제합니다. CDN 미사용 시 16·17은 빈 문자열로 두거나 비워둬도 됩니다 (앱이 비어 있으면 미사용 처리하는 경우).
 
 ### 1. NHN Cloud 인증 정보
 
@@ -107,7 +109,7 @@ curl -s -H "X-Auth-Token: $TOKEN" \
 **테스트 인스턴스 이미지**: 테스트 인스턴스는 **빌드 인스턴스를 스냅샷한 이미지**로만 생성됩니다. 워크플로우가 빌드 인스턴스를 패킹해 NHN Cloud Image 서비스에 등록한 뒤, 그 이미지 ID로 테스트 인스턴스를 띄우므로 별도 Secret은 없습니다. Image API(이미지 목록 조회 등)는 [Image API 가이드](https://docs.nhncloud.com/ko/Compute/Image/ko/public-api/)를 참고하세요.
 
 **보안 그룹 설정 필수 사항:**
-- 인바운드: SSH (22), HTTP (8000) 허용
+- 인바운드: SSH (22), 앱 (8000), node_exporter (9100, Prometheus 스크래핑용)
 - 아웃바운드: 모든 트래픽 허용 (패키지 다운로드용)
 
 ### 3. Observability 설정
@@ -115,8 +117,12 @@ curl -s -H "X-Auth-Token: $TOKEN" \
 | Secret 이름 | 설명 | 예시 |
 |-------------|------|------|
 | `LOKI_URL` | Loki 서버 URL (Promtail이 로그 전송) | `http://192.168.4.73:3100` |
+| `PROMETHEUS_PUSHGATEWAY_URL` | Pushgateway URL (앱이 주기적으로 커스텀 메트릭 푸시) | `http://pushgateway:9091` |
+| `PROMETHEUS_PUSH_INTERVAL_SECONDS` | Pushgateway 푸시 주기(초). 비우면 앱 기본값(30) 사용 | `30` |
 
-**메트릭**: Photo API는 `/metrics` 엔드포인트로 Prometheus 메트릭을 노출합니다. Prometheus 서버에서 해당 인스턴스(예: `http://인스턴스IP:8000/metrics`)를 스크래핑 대상으로 등록하면 됩니다. InfluxDB/Telegraf는 사용하지 않습니다.
+**메트릭**
+- **앱**: Photo API는 `http://인스턴스IP:8000/metrics` 로 Prometheus 메트릭을 노출합니다. 스크래핑 또는 Pushgateway 푸시(`PROMETHEUS_PUSHGATEWAY_URL` 설정 시) 사용.
+- **인스턴스 리소스**: 이미지에 **node_exporter**가 포함되어 `http://인스턴스IP:9100/metrics` 로 호스트 메트릭(CPU, 메모리, 디스크 등)을 노출합니다. Prometheus에서 해당 타겟을 스크래핑하면 됩니다.
 
 ### 4. Photo API 애플리케이션 설정
 

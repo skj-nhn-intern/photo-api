@@ -41,7 +41,11 @@
 
 2. **.env 내용을 stdin으로 넘기는 경우**  
    - `apply-env-and-restart.sh --stdin`  
-   → 표준입력 내용을 `/opt/photo-api/.env`로 저장 후 재시작.
+   → 표준입력 내용으로 `/opt/photo-api/.env` **전체를 덮어쓴 뒤** 재시작. (기존 .env는 대체됨)
+
+3. **재시작만 하는 경우**  
+   - `apply-env-and-restart.sh --restart-only`  
+   → .env는 수정하지 않고 photo-api·promtail만 재시작.
 
 ## 배포 후 검증 (verify-after-deploy.sh)
 

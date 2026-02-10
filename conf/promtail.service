@@ -1,0 +1,14 @@
+[Unit]
+Description=Promtail
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/photo-api/.env
+ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

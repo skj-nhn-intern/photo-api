@@ -77,7 +77,8 @@ export NHN_OBJECT_STORAGE_SECRET_KEY="${NHN_OBJECT_STORAGE_SECRET_KEY:-}"
 
 usage() {
   echo "Usage: export VAR=value ... && $0"
-  echo "       $0 --stdin   # read .env content from stdin"
+  echo "       $0 --stdin        # read .env content from stdin (전체 내용 덮어씀)"
+  echo "       $0 --restart-only # .env 건드리지 않고 서비스만 재시작"
   exit 0
 }
 
@@ -85,7 +86,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
 fi
 
-if [[ "${1:-}" == "--stdin" ]]; then
+if [[ "${1:-}" == "--restart-only" ]]; then
+  echo "Restart only (no .env write)"
+elif [[ "${1:-}" == "--stdin" ]]; then
   sudo tee "$ENV_FILE" > /dev/null
   echo "Written .env from stdin to $ENV_FILE"
 else

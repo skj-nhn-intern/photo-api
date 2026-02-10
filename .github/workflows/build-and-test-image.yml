@@ -19,6 +19,7 @@ on:
 env:
   PYTHON_VERSION: '3.11'
   PROMTAIL_VERSION: '3.6.4'
+  NODE_EXPORTER_VERSION: '1.10.0'
 
 jobs:
   build-and-create-image:
@@ -100,12 +101,14 @@ jobs:
         run: |
           echo "📦 빌드 환경 설정 중..."
           
-          # 환경 변수 파일 생성 (메트릭은 Prometheus가 /metrics 스크래핑)
+          # 환경 변수 파일 생성 (메트릭: /metrics 스크래핑, Pushgateway 선택)
           cat > .env.build << EOF
           LOKI_URL=${{ secrets.LOKI_URL }}
           INSTANCE_IP=${{ steps.create_instance.outputs.instance_ip }}
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+          PROMETHEUS_PUSHGATEWAY_URL=${{ secrets.PROMETHEUS_PUSHGATEWAY_URL }}
+          PROMETHEUS_PUSH_INTERVAL_SECONDS=${{ secrets.PROMETHEUS_PUSH_INTERVAL_SECONDS }}
           NHN_OBJECT_STORAGE_ENDPOINT=${{ secrets.NHN_OBJECT_STORAGE_ENDPOINT }}
           NHN_OBJECT_STORAGE_ACCESS_KEY=${{ secrets.NHN_OBJECT_STORAGE_ACCESS_KEY }}
           NHN_OBJECT_STORAGE_SECRET_KEY=${{ secrets.NHN_OBJECT_STORAGE_SECRET_KEY }}
@@ -142,6 +145,10 @@ jobs:
           echo "📥 Promtail 바이너리 다운로드 중..."
           curl -sSL -o offline-packages/promtail.zip \
             "https://github.com/grafana/loki/releases/download/v${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+          # node_exporter (인스턴스 리소스 메트릭)
+          echo "📥 node_exporter 다운로드 중..."
+          curl -sSL -o offline-packages/node_exporter.tar.gz \
+            "https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
           
           echo "✅ 오프라인 패키지 다운로드 완료"
 
@@ -224,29 +231,22 @@ jobs:
           sudo chmod +x /opt/promtail/promtail
           
           sudo cp /opt/photo-api/conf/promtail-config.yaml /opt/promtail/promtail-config.yaml
+          sudo cp /opt/photo-api/conf/promtail.service /etc/systemd/system/promtail.service
           
-          # Promtail systemd 서비스
-          sudo tee /etc/systemd/system/promtail.service > /dev/null << 'EOF'
-          [Unit]
-          Description=Promtail
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=simple
-          EnvironmentFile=/opt/photo-api/.env
-          ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true
-          Restart=on-failure
-          RestartSec=5
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
+          echo "=== 4단계: node_exporter 설정 (인스턴스 리소스 메트릭) ==="
+          sudo useradd -r -s /usr/sbin/nologin -d /opt/node_exporter node-exporter 2>/dev/null || true
+          sudo mkdir -p /opt/node_exporter
+          sudo tar -xzf /tmp/offline-packages/node_exporter.tar.gz -C /tmp/
+          sudo mv /tmp/node_exporter-*.linux-amd64/node_exporter /opt/node_exporter/
+          sudo rm -rf /tmp/node_exporter-*.linux-amd64
+          sudo chown -R node-exporter:node-exporter /opt/node_exporter
+          sudo cp /opt/photo-api/conf/node_exporter.service /etc/systemd/system/node_exporter.service
           
           echo "=== systemd 서비스 활성화 ==="
           sudo systemctl daemon-reload
           sudo systemctl enable photo-api.service
           sudo systemctl enable promtail.service
+          sudo systemctl enable node_exporter.service
           
           echo "=== 정리 ==="
           sudo rm -rf /tmp/photo-api /tmp/offline-packages
@@ -346,9 +346,11 @@ jobs:
               echo "📊 API 정보:"
               curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/ | jq .
               
-              # Metrics 확인
-              echo "📈 Prometheus 메트릭 확인:"
-              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/metrics | head -20
+              # Metrics 확인 (앱 /metrics, node_exporter 인스턴스 리소스)
+              echo "📈 앱 메트릭 (8000):"
+              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/metrics | head -15
+              echo "📈 node_exporter 메트릭 (9100):"
+              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:9100/metrics | head -10
               
               echo "✅ 모든 테스트 통과"
               exit 0
