@@ -8,8 +8,8 @@ Type=simple
 EnvironmentFile=/opt/photo-api/.env
 ExecStartPre=/bin/sh -c 'test -x /opt/promtail/promtail || { echo "Promtail: binary not found or not executable"; exit 1; }'
 ExecStartPre=/bin/sh -c 'test -f /opt/promtail/promtail-config.yaml || { echo "Promtail: config not found"; exit 1; }'
-# 셸에서 .env 를 명시적으로 로드 후 LOKI_URL 확인 (systemd EnvironmentFile 타이밍 이슈 방지)
-ExecStart=/bin/sh -c 'set -a; [ -r /opt/photo-api/.env ] && . /opt/photo-api/.env; set +a; test -n "${LOKI_URL}" || { echo "Promtail: LOKI_URL not set, skipping"; exit 0; }; exec /opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true'
+# 셸에서 .env 로드 후 LOKI_URL 사용 (.env 비어 있으면 기본값으로 기동, apply-env-and-restart.sh LOKI_URL_DEFAULT와 동일)
+ExecStart=/bin/sh -c 'set -a; [ -r /opt/photo-api/.env ] && . /opt/photo-api/.env; set +a; export LOKI_URL="${LOKI_URL:-http://192.168.4.73:3100}"; exec /opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml -config.expand-env=true'
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5

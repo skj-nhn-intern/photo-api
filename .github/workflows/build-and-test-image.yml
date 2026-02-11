@@ -101,9 +101,13 @@ jobs:
         run: |
           echo "📦 빌드 환경 설정 중..."
           
+          # LOKI_URL: Secret 값 앞뒤 공백/줄바꿈 제거 후 사용 (GitHub UI 붙여넣기 시 포함될 수 있음)
+          LOKI_URL_TRIM="${{ secrets.LOKI_URL }}"
+          LOKI_URL_TRIM=$(echo "$LOKI_URL_TRIM" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
           # 환경 변수 파일 생성 (메트릭: /metrics 스크래핑, Pushgateway 선택)
-          cat > .env.build << EOF
-          LOKI_URL=${{ secrets.LOKI_URL }}
+          cat > .env.build << ENVEOF
+          LOKI_URL=${LOKI_URL_TRIM}
           INSTANCE_IP=${{ steps.create_instance.outputs.instance_ip }}
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
@@ -114,7 +118,15 @@ jobs:
           NHN_OBJECT_STORAGE_SECRET_KEY=${{ secrets.NHN_OBJECT_STORAGE_SECRET_KEY }}
           NHN_CDN_DOMAIN=${{ secrets.NHN_CDN_DOMAIN }}
           NHN_CDN_AUTH_KEY=${{ secrets.NHN_CDN_AUTH_KEY }}
-          EOF
+          ENVEOF
+          
+          # LOKI_URL 미설정 시 이미지에 빈 값이 들어가 Promtail이 기동하지 않음 → 빌드 실패로 조기 발견
+          LOKI_VAL=$(grep '^LOKI_URL=' .env.build 2>/dev/null | cut -d= -f2-)
+          if [ -z "$LOKI_VAL" ]; then
+            echo "::error::LOKI_URL is not set. Add LOKI_URL to Repository Secrets (Settings > Secrets and variables > Actions) and re-run. Name must be exactly: LOKI_URL"
+            exit 1
+          fi
+          echo "✅ LOKI_URL 설정됨 (값 길이: ${#LOKI_VAL}자, 이미지 빌드에 반영됩니다)"
 
       - name: Upload source code to build instance
         run: |

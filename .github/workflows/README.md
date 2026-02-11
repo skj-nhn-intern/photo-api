@@ -27,8 +27,10 @@
 
 **필수 Secrets**: 
 - NHN Cloud 인증 (7개)
-- Observability (1개: LOKI_URL)
+- Observability (1개: **LOKI_URL** — 이름 정확히 `LOKI_URL`, Repository Secrets에 등록)
 - Application 설정 (7개)
+
+**주의**: Secret 추가·변경 후에는 **반드시 워크플로우를 다시 실행**해 새 이미지를 빌드해야 합니다. 기존 인스턴스는 예전 이미지의 `.env`를 쓰므로, 새 Secret이 반영되지 않습니다. (기존 인스턴스에만 반영하려면 서버에서 `/opt/photo-api/.env`에 직접 넣고 `sudo systemctl restart promtail`)
 
 자세한 설정 방법은 [GITHUB_ACTIONS_SETUP.md](../GITHUB_ACTIONS_SETUP.md)를 참조하세요.
 
