@@ -294,6 +294,13 @@ jobs:
           ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl status photo-api.service --no-pager || true; sudo journalctl -u photo-api -n 80 --no-pager || true"
           exit 1
 
+      - name: Prepare image for first-boot SSH (cloud-init clean)
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }} \
+            ubuntu@${{ steps.create_instance.outputs.instance_ip }} \
+            "sudo cloud-init clean && sudo sync"
+          echo "✅ cloud-init 상태 초기화 완료 → 이 이미지로 띄운 인스턴스는 첫 부팅 시 cloud-init이 실행되어 SSH 키가 주입됩니다."
+
       - name: Stop instance before creating image
         env:
           TOKEN: ${{ steps.create_instance.outputs.token }}
