@@ -26,6 +26,13 @@ jobs:
     name: Build and create image (KR1, KR2)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    outputs:
+      build_instance_id: ${{ steps.create_instance.outputs.instance_id }}
+      test_instance_id: ${{ steps.test_instance.outputs.test_instance_id }}
+      compute_url: ${{ steps.create_instance.outputs.compute_url }}
+      keypair_name: ${{ steps.create_instance.outputs.keypair_name }}
+      build_floating_ip_id: ${{ steps.create_instance.outputs.floating_ip_id }}
+      test_floating_ip_id: ${{ steps.test_instance.outputs.test_floating_ip_id }}
     steps:
       - name: Set KR1 for build and test
         run: |
@@ -412,18 +419,6 @@ jobs:
       #     TARGET_IMAGE_BASE_URL: ${{ secrets.NHN_IMAGE_BASE_URL_KR2 }}
       #   run: python3 scripts/ci/copy_image_to_region.py
 
-      - name: Cleanup KR1 resources
-        if: always() && github.event.inputs.skip_cleanup != 'true'
-        env:
-          TOKEN: ${{ steps.create_instance.outputs.token }}
-          COMPUTE_URL: ${{ steps.create_instance.outputs.compute_url }}
-          BUILD_INSTANCE_ID: ${{ steps.create_instance.outputs.instance_id }}
-          TEST_INSTANCE_ID: ${{ steps.test_instance.outputs.test_instance_id }}
-          BUILD_FLOATING_IP_ID: ${{ steps.create_instance.outputs.floating_ip_id }}
-          TEST_FLOATING_IP_ID: ${{ steps.test_instance.outputs.test_floating_ip_id }}
-          KEYPAIR_NAME: ${{ steps.create_instance.outputs.keypair_name }}
-        run: python3 scripts/ci/cleanup.py
-
       - name: Summary
         if: always()
         run: |
@@ -446,3 +441,42 @@ jobs:
           echo "- **KR2 이미지 ID**: - (비활성화됨)" >> $GITHUB_STEP_SUMMARY
           echo "- **Git Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **빌드 시간**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  # 실패/취소/타임아웃 시에도 빌드 인스턴스를 반드시 삭제 (같은 job 내 Cleanup이 취소 시 스킵될 수 있음)
+  cleanup-resources:
+    name: Cleanup resources (always)
+    runs-on: ubuntu-22.04
+    needs: build-and-create-image
+    if: always() && github.event.inputs.skip_cleanup != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install --upgrade pip && pip install requests
+
+      - name: Get NHN token
+        id: get_token
+        env:
+          NHN_AUTH_URL: ${{ secrets.NHN_AUTH_URL }}
+          NHN_TENANT_ID: ${{ secrets.NHN_TENANT_ID }}
+          NHN_USERNAME: ${{ secrets.NHN_USERNAME }}
+          NHN_PASSWORD: ${{ secrets.NHN_PASSWORD }}
+          NHN_REGION: KR1
+        run: cd scripts/ci && python3 get_token.py
+
+      - name: Cleanup KR1 resources
+        env:
+          TOKEN: ${{ steps.get_token.outputs.token }}
+          COMPUTE_URL: ${{ steps.get_token.outputs.compute_url }}
+          BUILD_INSTANCE_ID: ${{ needs.build-and-create-image.outputs.build_instance_id }}
+          TEST_INSTANCE_ID: ${{ needs.build-and-create-image.outputs.test_instance_id }}
+          BUILD_FLOATING_IP_ID: ${{ needs.build-and-create-image.outputs.build_floating_ip_id }}
+          TEST_FLOATING_IP_ID: ${{ needs.build-and-create-image.outputs.test_floating_ip_id }}
+          KEYPAIR_NAME: ${{ needs.build-and-create-image.outputs.keypair_name }}
+        run: cd scripts/ci && python3 cleanup.py
