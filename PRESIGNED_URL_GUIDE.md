@@ -495,6 +495,19 @@ API로 설정할 경우: [PutBucketCORS](https://api-gov.ncloud-docs.com/docs/st
 
 **요약:** Presigned URL은 서버에서 정상 생성되지만, **브라우저가 다른 오리진으로 요청할 때** 반드시 **버킷 CORS**가 허용되어 있어야 합니다. 400이 OPTIONS 요청에서 난다면 CORS 미설정이 원인입니다.
 
+### InvalidBucketName (BucketName: v1)
+
+에러 예: `<Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message><BucketName>v1</BucketName>`
+
+**원인:** S3 API 엔드포인트 URL에 **경로**(`/v1/AUTH_xxx` 등)가 포함되어 있으면, 생성된 presigned URL이 `.../v1/AUTH_xxx/컨테이너/...` 형태가 되고, 스토리지가 **첫 경로 세그먼트 `v1`을 버킷 이름**으로 잘못 해석합니다.
+
+**해결:** `NHN_S3_ENDPOINT_URL` 은 **호스트만** 설정하세요. 경로를 넣지 마세요.
+
+- 잘못된 예: `https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_5883ff5244d6421e964eb56f20f93e76`
+- 올바른 예: `https://kr1-api-object-storage.nhncloudservice.com`
+
+애플리케이션에서는 엔드포인트에서 경로를 제거한 뒤 S3 클라이언트를 생성하므로, 기존에 경로를 넣었더라도 동작은 보정됩니다. 새로 설정할 때는 위와 같이 호스트만 넣는 것을 권장합니다.
+
 ---
 
 ### 테스트 방법

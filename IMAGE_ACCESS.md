@@ -11,6 +11,82 @@
 | **효율** | CDN 설정 시 서버가 **302 리다이렉트** → 브라우저가 CDN에서 직접 다운로드 (이미지 바이트가 LB/백엔드 경유 안 함). |
 | **공유 앨범** | 인증 없이 접근: `/share/{token}/photos/{photo_id}/image` (공유 링크 유효 시 해당 앨범 사진만). |
 
+## 흐름도
+
+### 로그인 사용자: 내 사진 이미지 접근
+
+```mermaid
+sequenceDiagram
+    participant C as 클라이언트
+    participant API as API 서버 (LB 경유)
+    participant CDN as CDN
+    participant OS as Object Storage
+
+    C->>API: GET /photos/123/image + Authorization: Bearer JWT
+    API->>API: JWT 검증, 사진 소유자 여부 확인
+    alt 소유자 아님
+        API-->>C: 404 Not Found
+    else 소유자임
+        alt CDN 설정됨
+            API-->>C: 302 Redirect → CDN URL (짧은 유효기간 토큰)
+            C->>CDN: GET (리다이렉트 URL)
+            CDN->>OS: (원본 조회)
+            CDN-->>C: 200 이미지 바이트
+            Note over C,CDN: 이미지 트래픽은 LB/백엔드 미경유
+        else CDN 미설정
+            API->>OS: 다운로드
+            OS-->>API: 이미지 바이트
+            API-->>C: 200 이미지 바이트
+            Note over C,API: 이미지 트래픽이 LB/백엔드 경유
+        end
+    end
+```
+
+### 공유 앨범: 비로그인 이미지 접근
+
+```mermaid
+sequenceDiagram
+    participant C as 클라이언트 (비로그인)
+    participant API as API 서버 (LB 경유)
+    participant CDN as CDN
+    participant OS as Object Storage
+
+    C->>API: GET /share/{token}/photos/456/image
+    API->>API: 공유 링크 유효성, 앨범 소속 여부 확인
+    alt 링크 무효 또는 해당 앨범 사진 아님
+        API-->>C: 404 / 410
+    else 유효함
+        alt CDN 설정됨
+            API-->>C: 302 Redirect → CDN URL
+            C->>CDN: GET (리다이렉트 URL)
+            CDN-->>C: 200 이미지 바이트
+        else CDN 미설정
+            API->>OS: 다운로드
+            OS-->>API: 이미지 바이트
+            API-->>C: 200 이미지 바이트
+        end
+    end
+```
+
+### URL·트래픽 요약
+
+```mermaid
+flowchart LR
+    subgraph 로그인["로그인 사용자"]
+        A1[목록/상세 API] -->|url: /photos/id/image| A2[이미지 요청 + JWT]
+        A2 --> A3{CDN?}
+        A3 -->|예| A4[302 → CDN]
+        A3 -->|아니오| A5[스트리밍]
+    end
+
+    subgraph 공유["공유 앨범"]
+        B1[GET /share/token] -->|url: /share/token/photos/id/image| B2[이미지 요청]
+        B2 --> B3{CDN?}
+        B3 -->|예| B4[302 → CDN]
+        B3 -->|아니오| B5[스트리밍]
+    end
+```
+
 ## 로그인 사용자 (내 사진/앨범)
 
 1. 목록/상세 API(`GET /photos`, `GET /photos/{id}` 등)는 **JWT 필요**.

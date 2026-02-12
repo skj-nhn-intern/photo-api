@@ -530,13 +530,20 @@ class NHNObjectStorageService:
                 "Please set NHN_S3_ACCESS_KEY and NHN_S3_SECRET_KEY environment variables."
             )
         
+        # S3 API 엔드포인트는 호스트만 사용. /v1/AUTH_xxx 같은 경로가 있으면 서버가 'v1'을 버킷으로 잘못 해석함(InvalidBucketName).
+        endpoint = (self.settings.nhn_s3_endpoint_url or "").strip()
+        if endpoint:
+            from urllib.parse import urlparse
+            parsed = urlparse(endpoint if "://" in endpoint else f"https://{endpoint}")
+            endpoint = f"{parsed.scheme or 'https'}://{parsed.netloc or parsed.path.split('/')[0]}"
+        
         # NHN Cloud S3 API 설정
         # 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/#aws-sdk
         self._s3_client = boto3.client(
             's3',
             aws_access_key_id=self.settings.nhn_s3_access_key,
             aws_secret_access_key=self.settings.nhn_s3_secret_key,
-            endpoint_url=self.settings.nhn_s3_endpoint_url,
+            endpoint_url=endpoint or self.settings.nhn_s3_endpoint_url,
             region_name=self.settings.nhn_s3_region_name,
             config=Config(
                 signature_version='s3v4',

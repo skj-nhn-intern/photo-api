@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     nhn_s3_secret_key: str = Field(default="", description="S3 API Secret Key (EC2 credentials)")
     nhn_s3_endpoint_url: str = Field(
         default="https://kr1-api-object-storage.nhncloudservice.com",
-        description="S3 API Endpoint URL"
+        description="S3 API 엔드포인트 URL. 호스트만 사용 (경로 /v1/AUTH_xxx 포함 시 InvalidBucketName 발생)."
     )
     nhn_s3_region_name: str = Field(default="kr1", description="S3 Region Name")
     nhn_s3_presigned_url_expire_seconds: int = Field(default=3600, description="Presigned URL 유효 시간 (초)")
