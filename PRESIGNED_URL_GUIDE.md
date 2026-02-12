@@ -508,6 +508,50 @@ API로 설정할 경우: [PutBucketCORS](https://api-gov.ncloud-docs.com/docs/st
 
 애플리케이션에서는 엔드포인트에서 경로를 제거한 뒤 S3 클라이언트를 생성하므로, 기존에 경로를 넣었더라도 동작은 보정됩니다. 새로 설정할 때는 위와 같이 호스트만 넣는 것을 권장합니다.
 
+### SignatureDoesNotMatch (서명 불일치)
+
+에러 예: `<Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided.</Message>`
+
+**원인:** presigned URL 생성 시 사용한 정보와 실제 PUT 요청이 **조금이라도 다르면** 서명이 맞지 않습니다.
+
+**체크리스트:**
+
+1. **Content-Type을 반드시 맞추기**  
+   presigned URL을 발급받을 때 넣은 `content_type`(예: `image/png`)과 **실제 PUT 요청의 `Content-Type` 헤더가 동일**해야 합니다.  
+   - API 응답의 `upload_headers.Content-Type` 값을 그대로 사용하세요.  
+   - 다른 값을 보내거나, 헤더를 빼면 서명 불일치가 납니다.
+
+2. **헤더는 필요한 것만**  
+   PUT 시 **`Content-Type`만 추가**하고, 서명에 포함되지 않은 커스텀 헤더를 붙이지 마세요.  
+   (Host는 브라우저가 자동으로 넣습니다.)
+
+3. **S3 API 전용 자격 증명 사용**  
+   `NHN_S3_ACCESS_KEY` / `NHN_S3_SECRET_KEY`는 콘솔에서 발급한 **S3 API(EC2 형식) 자격 증명**이어야 합니다.  
+   Swift/IAM 사용자 비밀번호와 혼동하지 마세요.  
+   - 시크릿 키 앞뒤 공백, 줄바꿈이 없어야 합니다.
+
+4. **Presigned URL 그대로 사용**  
+   받은 URL을 수정하거나 쿼리 파라미를 추가/제거하면 서명이 깨집니다.  
+   그대로 한 번에 PUT에 사용하세요.
+
+5. **시간 동기화**  
+   서버(또는 presigned URL을 생성한 환경)와 NHN Cloud 서버의 시각이 크게 어긋나면 서명 오류가 날 수 있습니다.  
+   NTP 등으로 시간을 맞춰 두세요.
+
+**클라이언트 예시 (fetch):**
+
+```javascript
+// 1) presigned-url 응답에서 받은 값 사용
+const { upload_url, upload_headers } = await presignedResponse.json();
+await fetch(upload_url, {
+  method: 'PUT',
+  headers: {
+    'Content-Type': upload_headers['Content-Type']   // 반드시 동일
+  },
+  body: file
+});
+```
+
 ---
 
 ### 테스트 방법

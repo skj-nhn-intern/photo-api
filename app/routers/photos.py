@@ -195,6 +195,7 @@ async def get_presigned_upload_url(
             object_key=upload_data["object_key"],
             expires_in=settings.nhn_s3_presigned_url_expire_seconds,
             upload_method=upload_data["upload_method"],
+            upload_headers=upload_data.get("upload_headers", {}),
         )
         
     except ValueError as e:

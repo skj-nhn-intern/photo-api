@@ -83,6 +83,10 @@ class PresignedUrlResponse(BaseModel):
     object_key: str = Field(..., description="Object key in storage")
     expires_in: int = Field(..., description="URL expiration time in seconds")
     upload_method: str = Field(default="PUT", description="HTTP method to use for upload")
+    upload_headers: dict = Field(
+        default_factory=dict,
+        description="PUT 요청 시 반드시 그대로 사용할 헤더 (Content-Type 등). 서명 불일치 방지.",
+    )
 
 
 class PhotoUploadConfirmRequest(BaseModel):
