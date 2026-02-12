@@ -96,8 +96,8 @@ async def get_shared_album_image(
             photo.storage_path,
             expires_in=settings.image_token_expire_seconds,
         )
-        return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
-
+        if cdn_url:
+            return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
     try:
         file_content = await photo_service.download_photo(photo)
     except Exception as e:

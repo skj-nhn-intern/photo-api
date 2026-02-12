@@ -589,8 +589,7 @@ class NHNObjectStorageService:
         s3_client = self._get_s3_client()
         
         try:
-            # Presigned URL for PUT operation
-            # 클라이언트는 이 URL로 PUT 요청을 보내면 됨
+            # Presigned URL for PUT only. 이미지 보기는 S3 GET presigned 미사용 (CDN Auth Token 또는 백엔드 스트리밍).
             url = s3_client.generate_presigned_url(
                 ClientMethod='put_object',
                 Params={

@@ -53,6 +53,50 @@ Presigned URL을 사용한 업로드는 3단계로 구성됩니다:
 3. 업로드 완료 확인 (POST /photos/confirm)
 ```
 
+### 업로드/다운로드 전체 흐름 (CDN · Object Storage)
+
+**업로드**는 CDN을 타지 않습니다. 클라이언트가 Object Storage로 **직접** 올립니다.
+
+```
+[업로드]
+  브라우저 ──(1) POST /photos/presigned-url (JWT)──► photo-api
+       ◄──(2) { upload_url (S3 presigned PUT), upload_headers }──
+  브라우저 ──(3) PUT upload_url (바이너리)─────────────────────► Object Storage (S3)
+  브라우저 ──(4) POST /photos/confirm (photo_id)────────────────► photo-api
+```
+
+**다운로드(이미지 보기)** 는 CDN 설정 여부에 따라 두 가지입니다.
+
+```
+[다운로드 - CDN 사용 시]
+  브라우저 ──(1) GET /photos/{id}/image (JWT)──────────────────► photo-api
+       ◄──(2) 302 Redirect: https://CDN도메인/경로?token=CDN_AUTH_TOKEN
+  브라우저 ──(3) GET CDN_URL (token 쿼리)──────────────────────► CDN
+       ◄──(4) 200 + 이미지 (CDN이 캐시에서 반환 or 원본에서 가져와 캐시 후 반환)
+  (원본 조회 시) CDN ── GET (원본) ──► Object Storage (Swift/원본)
+```
+
+```
+[다운로드 - CDN 미사용 시]
+  브라우저 ──(1) GET /photos/{id}/image (JWT)──────────────────► photo-api
+  photo-api ──(2) Swift/API로 파일 조회 ───────────────────────► Object Storage
+       ◄──(3) 200 + 이미지 바이트
+       ◄──(4) 200 + 이미지 ──────────────────────────────────── 브라우저
+```
+
+**CDN Auth Token이 필요한 이유 (보안)**
+
+- CDN 원본(Object Storage)을 **공개 URL로만 두면**, URL을 아는 누구나 이미지를 볼 수 있습니다.
+- 우리는 “**이 사진을 볼 권한이 있는 사람에게만**” 보여주려고 하므로, **photo-api가 JWT로 권한을 확인한 뒤** 짧은 유효기간의 **CDN Auth Token**을 붙인 URL만 내려줍니다.
+- 따라서 **토큰 없이 CDN URL만으로는 접근 불가**하고, 토큰이 있어도 **만료 후에는 사용 불가**합니다.  
+→ **보안 측면에서 “꼭 필요”**합니다 (공개 읽기 허용이 아니라면).
+
+**효율**
+
+- **CDN 사용 시**: 첫 요청은 CDN이 Object Storage에서 가져와 캐시하고, 이후 같은 이미지는 **CDN 캐시에서 바로 응답** → photo-api·Object Storage 부하 감소, 사용자 응답 속도 향상.
+- **CDN 미사용 시**: 매 요청마다 photo-api가 Object Storage에서 읽어서 스트리밍 → 백엔드·스토리지 부하와 지연이 커짐.
+- 정리: **보안 = CDN Auth Token**, **효율 = CDN 캐시**. 둘 다 쓰면 “보안 유지 + 트래픽/지연 감소”를 동시에 얻습니다.
+
 ### 1. Presigned URL 발급
 
 **Endpoint:** `POST /photos/presigned-url`
@@ -495,6 +539,183 @@ API로 설정할 경우: [PutBucketCORS](https://api-gov.ncloud-docs.com/docs/st
 
 **요약:** Presigned URL은 서버에서 정상 생성되지만, **브라우저가 다른 오리진으로 요청할 때** 반드시 **버킷 CORS**가 허용되어 있어야 합니다. 400이 OPTIONS 요청에서 난다면 CORS 미설정이 원인입니다.
 
+### 버킷 CORS에서 OPTIONS·메서드·헤더 허용하는 방법
+
+콘솔 CORS 화면에서 **허용할 웹사이트 주소(오리진)** 만 입력하는 경우, 일부 환경에서는 **허용 메서드(AllowedMethod)**·**허용 헤더(AllowedHeader)** 가 별도로 보이지 않을 수 있습니다. 그때는 아래 **방법 2 (AWS CLI)** 로 S3 호환 API에 직접 CORS를 넣어야 OPTIONS·GET·PUT·HEAD가 모두 허용됩니다.
+
+#### 방법 1: NHN Cloud 콘솔
+
+1. **Storage** → **Object Storage** → 사용 중인 **컨테이너(버킷)** 선택  
+2. **CORS 설정** / **교차 출처 리소스 공유(CORS) 설정 변경** 메뉴 이동  
+3. **허용할 웹사이트 주소**에 한 줄에 하나씩 입력:
+   - 개발/테스트: `*` 하나만 입력
+   - 운영: `https://실제프론트도메인.com` 등
+4. **확인** 클릭 후 저장  
+5. 같은 화면에 **허용 메서드**(GET, PUT, HEAD, OPTIONS), **허용 헤더** 설정이 있다면 **OPTIONS**와 **Content-Type**, **x-amz-\*** 등이 포함되도록 설정  
+6. 저장 후 브라우저에서 presigned URL 업로드/다운로드를 다시 시도해 403이 사라졌는지 확인  
+
+콘솔에 **메서드/헤더 항목이 없고**, 오리진만 저장한 뒤에도 **403 SignatureDoesNotMatch**가 계속 나오면 → **방법 2**로 진행하세요.
+
+#### 방법 2: AWS CLI로 CORS 설정 (S3 호환 API)
+
+NHN Cloud Object Storage는 S3 호환 API를 지원하므로, **AWS CLI**로 버킷 CORS를 설정할 수 있습니다. 이렇게 하면 **AllowedMethod**에 `OPTIONS`, `GET`, `PUT`, `HEAD`, **AllowedHeader**에 `*` 등을 명시적으로 넣을 수 있습니다.
+
+**1) CORS 설정 파일 준비**
+
+프로젝트 예시 파일 `conf/cors-for-bucket.example.json`을 사용하거나, 아래 내용으로 같은 경로에 저장한 뒤 필요 시 `AllowedOrigins`만 수정하세요.
+
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["*"],
+      "AllowedMethods": ["GET", "PUT", "HEAD", "OPTIONS"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}
+```
+
+운영 환경에서는 `AllowedOrigins`를 `["https://your-frontend.com"]` 처럼 실제 프론트 도메인으로 바꾸세요.
+
+**2) AWS CLI로 버킷에 CORS 적용**
+
+`NHN_S3_ACCESS_KEY`, `NHN_S3_SECRET_KEY`와 **버킷 이름(컨테이너 이름)**을 사용합니다. 리전은 `kr1` 등 NHN Cloud 리전명을 쓰면 됩니다.
+
+```bash
+export AWS_ACCESS_KEY_ID="여기에_NHN_S3_ACCESS_KEY"
+export AWS_SECRET_ACCESS_KEY="여기에_NHN_S3_SECRET_KEY"
+export BUCKET_NAME="실제버킷이름"   # 예: photo-container 또는 photo
+
+aws s3api put-bucket-cors \
+  --bucket "$BUCKET_NAME" \
+  --cors-configuration file://conf/cors-for-bucket.example.json \
+  --endpoint-url "https://kr1-api-object-storage.nhncloudservice.com" \
+  --region kr1
+```
+
+**3) 적용 확인**
+
+```bash
+aws s3api get-bucket-cors \
+  --bucket "$BUCKET_NAME" \
+  --endpoint-url "https://kr1-api-object-storage.nhncloudservice.com" \
+  --region kr1
+```
+
+출력에 `AllowedMethods`에 `OPTIONS`, `GET`, `PUT`, `HEAD`, `AllowedHeaders`에 `*`가 포함되어 있으면 정상입니다. 이후 브라우저에서 presigned URL로 다시 요청해 보세요.
+
+#### 방법 3: Object Storage API (Swift/컨테이너 API) curl
+
+**S3 API가 아닌 Swift 스타일 Object Storage API**를 쓰는 경우, 컨테이너에 **POST**로 CORS 메타데이터를 붙일 수 있습니다. OpenStack Swift 기반이므로 컨테이너 메타데이터 헤더를 사용합니다.
+
+**필요한 값**
+
+- `X-Auth-Token`: IAM/Keystone으로 발급한 토큰
+- `BASE_URL`: `https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_<테넌트ID>`
+- `CONTAINER`: 컨테이너 이름 (예: `photo-container`, `photo`)
+
+**1) 모든 오리진 허용 (개발/테스트용)**
+
+```bash
+curl -X POST \
+  -H 'X-Auth-Token: YOUR_TOKEN' \
+  -H 'X-Container-Meta-Access-Control-Allow-Origin: *' \
+  -H 'X-Container-Meta-Access-Control-Max-Age: 3600' \
+  -H 'X-Container-Meta-Access-Control-Expose-Headers: ETag' \
+  "https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_*****/CONTAINER"
+```
+
+**2) 특정 오리진만 허용**
+
+```bash
+curl -X POST \
+  -H 'X-Auth-Token: YOUR_TOKEN' \
+  -H 'X-Container-Meta-Access-Control-Allow-Origin: https://example.com' \
+  -H 'X-Container-Meta-Access-Control-Max-Age: 3600' \
+  -H 'X-Container-Meta-Access-Control-Expose-Headers: ETag' \
+  "https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_*****/CONTAINER"
+```
+
+**3) 여러 오리진 허용 (공백으로 구분)**
+
+```bash
+curl -X POST \
+  -H 'X-Auth-Token: YOUR_TOKEN' \
+  -H 'X-Container-Meta-Access-Control-Allow-Origin: https://example.com https://www.example.com http://localhost:5173' \
+  -H 'X-Container-Meta-Access-Control-Max-Age: 3600' \
+  -H 'X-Container-Meta-Access-Control-Expose-Headers: ETag' \
+  "https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_*****/CONTAINER"
+```
+
+**4) 변수로 쓸 때**
+
+```bash
+TOKEN="여기에_X-Auth-Token_값"
+BASE="https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_테넌트ID"
+CONTAINER="photo-container"
+
+curl -X POST \
+  -H "X-Auth-Token: $TOKEN" \
+  -H "X-Container-Meta-Access-Control-Allow-Origin: https://example.com" \
+  -H "X-Container-Meta-Access-Control-Max-Age: 3600" \
+  -H "X-Container-Meta-Access-Control-Expose-Headers: ETag" \
+  "${BASE}/${CONTAINER}"
+```
+
+**인증 토큰(X-Auth-Token)이란?**
+
+Object Storage **Swift API**를 쓸 때 필요한 **임시 인증 값**입니다. NHN Cloud **IAM(Keystone)** 에 **IAM 사용자명 + 비밀번호 + Tenant ID**를 보내면 발급해 주며, 일정 시간이 지나면 만료됩니다. photo-api가 사용하는 `NHN_STORAGE_IAM_USER`, `NHN_STORAGE_IAM_PASSWORD`, `NHN_STORAGE_TENANT_ID`로 발급하는 토큰과 동일한 것입니다.
+
+**curl로 토큰 발급받기:**
+
+쉘에서 따옴표/줄바꿈 때문에 JSON이 깨지면 서버가 400 Bad Request를 반환합니다. **JSON 본문을 파일로 넘기면** 안정적입니다.
+
+```bash
+# 아래 값은 NHN Cloud 콘솔 / photo-api .env 에서 확인
+TENANT_ID="테넌트ID"           # 숫자만 (AUTH_ 제외)
+IAM_USER="IAM사용자명"
+IAM_PASSWORD="IAM비밀번호"
+AUTH_URL="https://api-identity-infrastructure.nhncloudservice.com/v2.0"
+
+# JSON 파일로 본문 생성 (따옴표 깨짐 방지)
+cat << EOF > /tmp/auth-body.json
+{
+  "auth": {
+    "tenantId": "$TENANT_ID",
+    "passwordCredentials": {
+      "username": "$IAM_USER",
+      "password": "$IAM_PASSWORD"
+    }
+  }
+}
+EOF
+
+curl -s -X POST "${AUTH_URL}/tokens" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/auth-body.json | jq -r '.access.token.id'
+```
+
+출력된 긴 문자열이 **X-Auth-Token** 값입니다. 이 값을 복사해 위 CORS 설정 curl의 `X-Auth-Token` 헤더에 넣으면 됩니다. (jq가 없으면 `| jq -r '.access.token.id'` 대신 응답 JSON에서 `access.token.id` 값을 수동으로 복사하세요.)
+
+**한 줄로 하고 싶을 때** (값에 따옴표가 없을 때):
+
+```bash
+curl -s -X POST "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens" \
+  -H "Content-Type: application/json" \
+  -d '{"auth":{"tenantId":"'"$TENANT_ID"'","passwordCredentials":{"username":"'"$IAM_USER"'","password":"'"$IAM_PASSWORD"'"}}}' \
+  | jq -r '.access.token.id'
+```
+
+**참고**
+
+- **`*`**: 모든 오리진 허용. 개발/테스트 시 편합니다. NHN Cloud에서 `*`를 지원하지 않는 경우 에러가 나면, 그때는 특정 도메인만 넣으면 됩니다.
+- Swift CORS는 **Allow-Origin, Max-Age, Expose-Headers**만 컨테이너 메타에 넣습니다. OPTIONS는 허용된 오리진이면 200으로 응답합니다.
+- `AUTH_*****` / `테넌트ID`는 NHN Cloud 콘솔에서 확인한 Object Storage 계정(테넌트 ID)으로 채우세요.
+- Presigned URL을 **S3 API**로 쓰고 있다면, CORS가 S3 쪽에만 적용되는 경우가 있어 **방법 2 (AWS CLI)** 로 S3 버킷 CORS를 넣는 것이 맞을 수 있습니다. Swift API로 업로드/다운로드하는 경우에 이 curl이 유효합니다.
+
 ### InvalidBucketName (BucketName: v1)
 
 에러 예: `<Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message><BucketName>v1</BucketName>`
@@ -511,6 +732,23 @@ API로 설정할 경우: [PutBucketCORS](https://api-gov.ncloud-docs.com/docs/st
 ### SignatureDoesNotMatch (서명 불일치)
 
 에러 예: `<Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided.</Message>`
+
+#### 403 on OPTIONS (CORS preflight)
+
+브라우저가 **다른 오리진**(프론트 도메인 → Object Storage 도메인)으로 요청할 때, 실제 요청(PUT 또는 GET) 전에 **OPTIONS** preflight를 먼저 보냅니다. Presigned URL의 서명은 **특정 HTTP 메서드**(PUT 또는 GET)에 대해서만 유효합니다. OPTIONS 요청에는 PUT/GET용 서명이 적용되지 않으므로, 서버가 OPTIONS에도 서명 검사를 하면 **403 SignatureDoesNotMatch**가 납니다.
+
+**해결:**
+
+1. **Object Storage 버킷(컨테이너)에 CORS 설정**  
+   - **AllowedMethod**에 `OPTIONS`를 포함하고, OPTIONS는 인증 없이 허용되도록 설정합니다.  
+   - NHN Cloud Console → Object Storage → 해당 컨테이너 → CORS 설정에서 `GET`, `PUT`, `HEAD`, `OPTIONS` 허용.  
+   - CORS가 올바르게 설정되면 OPTIONS는 서명 없이 200으로 처리되고, 이후 실제 PUT/GET만 presigned URL로 인증됩니다.
+
+2. **이미지 보기: CDN Auth Token만 사용 (S3 GET presigned 미사용)**  
+   - photo-api는 이미지 보기 시 **CDN Auth Token URL**로만 302 리다이렉트하거나, 토큰 실패/미설정 시 **백엔드 스트리밍**합니다. **S3 GET presigned URL은 생성·리다이렉트하지 않습니다.**  
+   - 네트워크 탭에서 `kr1-api-object-storage.../photo/...?X-Amz-*` 형태 요청이 보이면, 다른 서비스/프록시가 S3 GET presigned를 쓰고 있거나, **NHN_CDN_DOMAIN**이 Object Storage 엔드포인트(`*object-storage*.nhncloudservice.com`)로 잘못 설정되었는지 확인하세요. CDN 도메인은 CDN 제공 도메인(예: `xxx.toastcdn.net`)이어야 합니다.
+
+#### PUT 요청 시 서명 불일치
 
 **원인:** presigned URL 생성 시 사용한 정보와 실제 PUT 요청이 **조금이라도 다르면** 서명이 맞지 않습니다.
 

@@ -424,15 +424,15 @@ async def get_photo_image(
     if not photo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
-    # CDN이 설정되어 있으면 짧은 유효기간 URL로 리다이렉트 → 트래픽이 LB/백엔드를 거치지 않음
+    # CDN Auth Token URL이 있으면 302 리다이렉트 (이미지 보기는 S3 GET presigned 미사용, CDN 토큰만)
     if settings.nhn_cdn_domain and settings.nhn_cdn_app_key:
         cdn_url = await photo_service.cdn.generate_auth_token_url(
             photo.storage_path,
             expires_in=settings.image_token_expire_seconds,
         )
-        return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
-
-    # CDN 미설정 시: 스트리밍 (로드밸런서 경유)
+        if cdn_url:
+            return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
+    # CDN 미설정 또는 토큰 실패 시: 백엔드 스트리밍
     try:
         file_content = await photo_service.download_photo(photo)
     except Exception as e:

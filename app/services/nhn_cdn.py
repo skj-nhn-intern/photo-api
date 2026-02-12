@@ -109,20 +109,21 @@ class NHNCDNService:
         self,
         object_path: str,
         expires_in: Optional[int] = None,
-    ) -> str:
+    ) -> Optional[str]:
         """
         Generate a CDN URL with Auth Token for secure access.
-        
+        이미지 보기는 이 CDN Auth Token URL 또는 백엔드 스트리밍만 사용 (S3 GET presigned 미사용).
+
         Args:
-            object_path: The path to the object in storage (e.g., "photos/uuid.jpg")
+            object_path: The path to the object in storage (e.g., "image/2/uuid.png")
             expires_in: Token expiration time in seconds (default from settings)
-            
+
         Returns:
-            CDN URL with auth token parameter
+            CDN URL with auth token, or None if CDN 미설정 or 토큰 발급 실패 (호출자는 스트리밍 fallback)
         """
-        # CDN 도메인이나 App Key가 설정되지 않은 경우 Object Storage URL 직접 반환
+        # CDN 미설정 시 None → 라우터에서 리다이렉트하지 않고 백엔드 스트리밍
         if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
-            return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
+            return None
         
         if expires_in is None:
             expires_in = self.settings.nhn_cdn_token_expire_seconds
@@ -152,18 +153,15 @@ class NHNCDNService:
         token = await self._request_auth_token(cdn_path, expires_in)
         
         if token:
-            # 캐시 저장
             self._token_cache[cache_key] = (token, time.time() + expires_in)
             return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={token}"
-        else:
-            # 토큰 실패 시: CDN 경로만 반환 (클라이언트는 CDN으로 요청, 토큰 없으면 403)
-            # Object Storage URL fallback 제거 → 이미지는 항상 CDN 경로로만 제공
-            logger.warning(
-                "CDN auth token failed, returning CDN URL without token (may 403)",
-                extra={"event": "cdn", "path": cdn_path},
-            )
-            return f"https://{self.settings.nhn_cdn_domain}{cdn_path}"
-    
+        # 토큰 실패 시 None → 라우터에서 302 대신 백엔드 스트리밍 (SignatureDoesNotMatch/403 방지)
+        logger.warning(
+            "CDN auth token failed, caller should stream from backend",
+            extra={"event": "cdn", "path": cdn_path},
+        )
+        return None
+
     def generate_auth_token_url_sync(
         self,
         object_path: str,
