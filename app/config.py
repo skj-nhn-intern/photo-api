@@ -104,14 +104,14 @@ class Settings(BaseSettings):
     nhn_cdn_encrypt_key: str = Field(default="", description="CDN Token Encryption Key (토큰 생성용)")
     nhn_cdn_token_expire_seconds: int = Field(default=3600, description="Auth Token 유효 시간 (초)")
     
-    # 이미지 접근 제어: 프록시 사용 시 URL 유출되어도 짧은 시간만 유효
+    # 이미지 접근: API는 항상 /photos/{id}/image 경로만 반환. JWT로 권한 확인 후 CDN 리다이렉트 또는 스트리밍.
     image_access_use_proxy: bool = Field(
         default=True,
-        description="True면 이미지를 백엔드 경유(프록시)로 제공하고, URL에 짧은 유효기간 토큰 사용. False면 CDN URL 직접 반환(기존 방식).",
+        description="(호환용) 이미지 URL을 API 경로로 할지 여부. 현재는 항상 API 경로(/photos/{id}/image) 사용.",
     )
     image_token_expire_seconds: int = Field(
         default=120,
-        description="이미지 접근 토큰 유효 시간(초). image_access_use_proxy=True일 때만 사용.",
+        description="이미지 302 리다이렉트 시 CDN 토큰 유효 시간(초).",
     )
     
     # NHN Cloud Log & Crash
@@ -148,6 +148,8 @@ class Settings(BaseSettings):
 
     # 로그 타임스탬프 타임존 (IANA, 예: Asia/Seoul). 비우면 UTC
     log_timezone: str = Field(default="Asia/Seoul", description="로그 timestamp 타임존 (IANA). 빈 문자열이면 UTC")
+    # 로그 디렉터리. 비우면 /var/log/photo-api 사용, 쓰기 실패 시 ./logs 로 fallback
+    log_dir: str = Field(default="", description="로그 파일 디렉터리 (비우면 /var/log/photo-api, 권한 없으면 ./logs)")
     
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")

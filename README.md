@@ -17,7 +17,7 @@ FastAPI 기반의 사진 관리 API 서버입니다. NHN Cloud의 Object Storage
 - 사진 조회 (`GET /photos/`, `GET /photos/{id}`)
 - 사진 수정/삭제 (`PATCH /photos/{id}`, `DELETE /photos/{id}`)
 - 업로드 완료 확인 (`POST /photos/confirm`)
-.
+.g
 
 ### 앨범 관리
 - 앨범 생성/조회/수정/삭제

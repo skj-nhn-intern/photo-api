@@ -473,6 +473,30 @@ uploadWithProgress(file, 1, jwtToken, (percent) => {
 
 ## 문제 해결
 
+### Presigned URL 접속 실패 (400 Bad Request on OPTIONS)
+
+브라우저에서 프론트엔드(예: `https://myapp.com`)가 Object Storage 도메인(`https://kr1-api-object-storage.nhncloudservice.com`)으로 **cross-origin** 요청을 보낼 때, 브라우저는 먼저 **CORS preflight**로 `OPTIONS` 요청을 보냅니다. Object Storage 버킷에 CORS가 설정되어 있지 않으면 `OPTIONS`에 대해 **400 Bad Request**가 반환되어 presigned URL 접속이 실패합니다.
+
+**해결 방법: Object Storage 버킷에 CORS 설정**
+
+1. **NHN Cloud Console** → **Storage** → **Object Storage** → 해당 컨테이너(버킷) 선택  
+2. **CORS 설정** 또는 **API 엔드포인트 설정** 메뉴에서 CORS 정책 추가  
+3. 아래와 같이 설정합니다 (프로덕션에서는 `AllowedOrigin`을 실제 프론트엔드 도메인으로 제한하는 것을 권장합니다).
+
+**CORS 정책 예시 (S3 호환 API 사용 시):**
+
+- **AllowedOrigin**: `*` (개발용) 또는 `https://your-frontend-domain.com`
+- **AllowedMethod**: `GET`, `PUT`, `HEAD`, `OPTIONS`
+- **AllowedHeader**: `*` 또는 `Content-Type`, `Authorization`, `x-amz-*` 등 필요한 헤더
+- **ExposeHeader**: (필요 시) `ETag`
+- **MaxAgeSeconds**: `3600`
+
+API로 설정할 경우: [PutBucketCORS](https://api-gov.ncloud-docs.com/docs/storage-objectstorage-putbucketcors) 문서를 참고하여 `{bucket-name}?cors=` 엔드포인트에 PUT 요청으로 XML CORS 정책을 적용합니다.
+
+**요약:** Presigned URL은 서버에서 정상 생성되지만, **브라우저가 다른 오리진으로 요청할 때** 반드시 **버킷 CORS**가 허용되어 있어야 합니다. 400이 OPTIONS 요청에서 난다면 CORS 미설정이 원인입니다.
+
+---
+
 ### 테스트 방법
 
 ```bash

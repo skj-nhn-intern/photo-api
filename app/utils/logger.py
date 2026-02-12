@@ -37,8 +37,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# Promtail의 __path__: /var/log/photo-api/*.log 와 동일해야 함
-LOG_DIR = Path("/var/log/photo-api")
+# 로그 디렉터리: 설정값 → /var/log/photo-api. setup_logging()에서 쓰기 실패 시 ./logs 로 fallback
+def _resolve_log_dir() -> Path:
+    if getattr(settings, "log_dir", None) and str(settings.log_dir).strip():
+        return Path(settings.log_dir).resolve()
+    return Path("/var/log/photo-api")
+
+
+LOG_DIR = _resolve_log_dir()
 
 # 로깅에서 제외할 개인정보 필드
 _SENSITIVE_FIELDS = frozenset({"email", "username", "password", "token", "secret"})
@@ -500,34 +506,48 @@ def setup_logging() -> None:
     stderr_handler.setFormatter(text_formatter)
     root_logger.addHandler(stderr_handler)
 
-    # 파일 로그: NDJSON (Promtail → Loki)
+    # 파일 로그: NDJSON (Promtail → Loki). /var/log 권한 없으면 ./logs 로 fallback
     json_formatter = JsonLinesFormatter()
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        app_log_file = LOG_DIR / "app.log"
-        error_log_file = LOG_DIR / "error.log"
+    log_dirs_to_try: list[Path] = [LOG_DIR]
+    if LOG_DIR != Path.cwd() / "logs":
+        log_dirs_to_try.append(Path.cwd() / "logs")
+    for log_dir in log_dirs_to_try:
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            app_log_file = log_dir / "app.log"
+            error_log_file = log_dir / "error.log"
+            app_log_file.touch(exist_ok=True)
+            error_log_file.touch(exist_ok=True)
 
-        file_handler = FlushingRotatingFileHandler(
-            app_log_file,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(json_formatter)
-        root_logger.addHandler(file_handler)
+            fh = FlushingRotatingFileHandler(
+                app_log_file,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            fh.setLevel(logging.INFO)
+            fh.setFormatter(json_formatter)
+            root_logger.addHandler(fh)
 
-        error_handler = FlushingRotatingFileHandler(
-            error_log_file,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        error_handler.setLevel(logging.ERROR)
-        error_handler.setFormatter(json_formatter)
-        root_logger.addHandler(error_handler)
-    except OSError as e:
-        root_logger.warning("File logging disabled: %s", e)
+            eh = FlushingRotatingFileHandler(
+                error_log_file,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            eh.setLevel(logging.ERROR)
+            eh.setFormatter(json_formatter)
+            root_logger.addHandler(eh)
+            if log_dir != LOG_DIR:
+                root_logger.warning(
+                    "File logging using fallback directory: %s (primary %s not writable)",
+                    log_dir,
+                    LOG_DIR,
+                )
+            break
+        except OSError as e:
+            if log_dir == log_dirs_to_try[-1]:
+                root_logger.warning("File logging disabled: %s", e)
     
     # 외부 라이브러리 로그 억제 (운영에서 노이즈 방지)
     logging.getLogger("uvicorn").setLevel(logging.WARNING)

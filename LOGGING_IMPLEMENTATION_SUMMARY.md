@@ -67,6 +67,12 @@ log_with_context()  # 모든 컨텍스트 제어 가능한 고급 로깅
 - 글로벌 예외 핸들러에 구조화된 로깅 적용
 - Lifespan 이벤트에 구조화된 로깅 적용
 
+### 3.1 로그가 적용되지 않을 때 (파일 로그)
+
+- **파일 로그**는 기본적으로 `/var/log/photo-api/` 에 NDJSON으로 기록됩니다.
+- 해당 경로에 **쓰기 권한이 없으면** (로컬/개발 환경 등) 자동으로 **`./logs`** 디렉터리로 fallback 합니다. 이때 stdout에 `File logging using fallback directory: ...` 경고가 한 번 출력됩니다.
+- 로그 디렉터리를 직접 지정하려면 환경 변수 **`LOG_DIR`** (또는 설정 `log_dir`)을 설정하세요.
+
 ### 4. 라우터 업데이트 (예시: `app/routers/auth.py`)
 
 #### 변경 사항

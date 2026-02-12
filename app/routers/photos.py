@@ -6,8 +6,10 @@ import mimetypes
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db
 from app.models.user import User
 
@@ -25,7 +27,6 @@ from app.schemas.photo import (
 )
 from app.services.photo import PhotoService
 from app.dependencies.auth import get_current_active_user
-from app.utils.security import verify_image_access_token
 
 router = APIRouter(prefix="/photos", tags=["Photos"])
 
@@ -400,26 +401,37 @@ async def get_photos(
 
 @router.get(
     "/{photo_id}/image",
-    summary="Stream photo (proxy); requires short-lived token in query t=",
+    summary="Image access (JWT required); redirects to CDN when configured",
 )
 async def get_photo_image(
     photo_id: int,
-    t: str = Query(..., description="Short-lived image access token"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
-    이미지 바이트 스트림 반환. 쿼리 파라미터 t에 서명된 짧은 유효기간 토큰 필요.
-    인가된 사용자에게만 목록 API에서 이 URL이 내려가므로, URL 유출 시에도 토큰 만료 후 접근 불가.
+    이미지 접근: **JWT 필수**. 권한 확인 후 CDN이 설정되어 있으면 짧은 유효기간 CDN URL로 302 리다이렉트하여
+    이미지 트래픽이 로드밸런서/백엔드를 거치지 않도록 합니다. CDN이 없으면 바이트 스트림으로 반환합니다.
+
+    - **인가**: Authorization: Bearer {JWT} 필요. 해당 사진의 소유자만 접근 가능.
+    - **효율**: CDN 설정 시 302 리다이렉트 → 브라우저가 CDN에서 직접 다운로드 (LB 경유 없음).
+    - **클라이언트**: `<img>` 에서 쓰려면 `fetch('/photos/{id}/image', { headers: { Authorization } })` 후 blob URL 로 넣거나,
+      같은 오리진 + 쿠키 인증을 사용하세요.
     """
-    if not t:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
-    verified_id = verify_image_access_token(t)
-    if verified_id is None or verified_id != photo_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or expired token")
+    settings = get_settings()
     photo_service = PhotoService(db)
-    photo = await photo_service.get_photo_by_id(photo_id, user_id=None)
+    photo = await photo_service.get_photo_by_id(photo_id, user_id=current_user.id)
     if not photo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+
+    # CDN이 설정되어 있으면 짧은 유효기간 URL로 리다이렉트 → 트래픽이 LB/백엔드를 거치지 않음
+    if settings.nhn_cdn_domain and settings.nhn_cdn_app_key:
+        cdn_url = await photo_service.cdn.generate_auth_token_url(
+            photo.storage_path,
+            expires_in=settings.image_token_expire_seconds,
+        )
+        return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
+
+    # CDN 미설정 시: 스트리밍 (로드밸런서 경유)
     try:
         file_content = await photo_service.download_photo(photo)
     except Exception as e:
@@ -428,13 +440,10 @@ async def get_photo_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load photo",
         )
-    from fastapi.responses import Response
     return Response(
         content=file_content,
         media_type=photo.content_type or "application/octet-stream",
-        headers={
-            "Cache-Control": "private, max-age=60",
-        },
+        headers={"Cache-Control": "private, max-age=60"},
     )
 
 

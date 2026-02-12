@@ -14,6 +14,7 @@ from app.models.photo import Photo
 from app.models.share import ShareLink
 from app.models.user import User
 from app.schemas.album import AlbumCreate, AlbumUpdate, AlbumWithPhotos
+from app.schemas.photo import PhotoWithUrl
 from app.schemas.share import ShareLinkCreate, ShareLinkResponse, SharedAlbumResponse
 from app.services.photo import PhotoService
 from app.utils.security import generate_share_token
@@ -262,6 +263,15 @@ class AlbumService:
             .order_by(AlbumPhoto.order)
         )
         return list(result.scalars().all())
+
+    async def get_photo_in_album(self, album_id: int, photo_id: int) -> Optional[Photo]:
+        """앨범에 포함된 사진만 반환. 공유 링크로 이미지 접근 시 검증용."""
+        result = await self.db.execute(
+            select(Photo)
+            .join(AlbumPhoto, AlbumPhoto.photo_id == Photo.id)
+            .where(AlbumPhoto.album_id == album_id, AlbumPhoto.photo_id == photo_id)
+        )
+        return result.scalar_one_or_none()
     
     async def _get_max_order(self, album_id: int) -> int:
         """Get the maximum order value in an album."""
@@ -420,6 +430,29 @@ class AlbumService:
         share_link.view_count += 1
         await self.db.flush()
     
+    def _photos_to_share_urls(
+        self,
+        photos: List[Photo],
+        share_token: str,
+    ) -> List[PhotoWithUrl]:
+        """공유 앨범용: 인증 없이 접근 가능한 이미지 URL 목록 생성."""
+        return [
+            PhotoWithUrl(
+                id=p.id,
+                owner_id=p.owner_id,
+                filename=p.filename,
+                original_filename=p.original_filename,
+                content_type=p.content_type,
+                file_size=p.file_size,
+                title=p.title,
+                description=p.description,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+                url=f"/share/{share_token}/photos/{p.id}/image",
+            )
+            for p in photos
+        ]
+
     async def get_shared_album(
         self,
         share_link: ShareLink,
@@ -443,9 +476,9 @@ class AlbumService:
         if not album:
             return None
         
-        # Get photos with CDN URLs
+        # Get photos with share image URLs (인증 없이 접근 가능한 /share/{token}/photos/{id}/image)
         photos = await self.get_album_photos(album.id)
-        photos_with_urls = await self.photo_service.get_photos_with_urls(photos)
+        photos_with_urls = self._photos_to_share_urls(photos, share_link.token)
         
         await self.increment_view_count(share_link)
         return SharedAlbumResponse(
