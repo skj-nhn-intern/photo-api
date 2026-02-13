@@ -13,7 +13,7 @@ sequenceDiagram
     Client->>+API: POST /photos/presigned-url<br/>{ album_id, filename, content_type, file_size }<br/>Header: Authorization: Bearer {JWT}
     API->>API: JWT 검증, 파일 크기/타입 검증
     API->>DB: 앨범 존재 및 권한 확인
-    API->>DB: Photo 레코드 생성 (pending)<br/>storage_path = image/{album_id}/{uuid}.{ext}
+    API->>DB: Photo 레코드 생성 (pending)<br/>storage_path = photo/photo/image/{album_id}/{uuid}.{ext}
     API->>API: generate_temp_upload_url(path, content_type)<br/>path = /v1/AUTH_{tenant}/{container}/{object_name}<br/>hmac_body = "PUT\n{expires}\n{path}"<br/>sig = HMAC-SHA256(temp_url_key, hmac_body)<br/>url = endpoint + path + ?temp_url_sig=&temp_url_expires=
     API->>DB: 앨범에 photo 추가, commit
     API-->>-Client: 200 { photo_id, upload_url, upload_method: "PUT", upload_headers: { "Content-Type": "image/jpeg" }, expires_in }

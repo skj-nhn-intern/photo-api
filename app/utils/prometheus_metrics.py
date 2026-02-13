@@ -5,7 +5,7 @@ Prometheus metrics for stability, high availability, and performance.
 - Node/instance: app_info
 - Stability: exceptions_total, db_errors_total, external_request_errors_total, log_queue_size
 - HA: ready gauge (1=up, 0=shutting down)
-- Performance: external_request_duration_seconds
+- Performance: external_request_duration_seconds, login_duration_seconds, active_sessions
 - Pushgateway: 선택 시 주기적으로 메트릭 푸시 (PROMETHEUS_PUSHGATEWAY_URL)
 """
 import asyncio
@@ -56,6 +56,22 @@ external_request_duration_seconds = Histogram(
     "External API request duration in seconds",
     ["service"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+    registry=REGISTRY,
+)
+
+# 로그인 지연(응답 시간) — 1,000ms/3,000ms 초과율 모니터링용 버킷
+login_duration_seconds = Histogram(
+    "photo_api_login_duration_seconds",
+    "Login request duration in seconds",
+    ["result"],  # success | failure
+    buckets=(0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 5.0),
+    registry=REGISTRY,
+)
+
+# 활성화된 세션 수 (인증된 요청이 처리 중인 수, JWT 기준)
+active_sessions = Gauge(
+    "photo_api_active_sessions",
+    "Number of in-flight requests with valid authentication",
     registry=REGISTRY,
 )
 

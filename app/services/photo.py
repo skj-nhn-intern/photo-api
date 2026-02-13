@@ -54,8 +54,8 @@ class PhotoService:
         # Generate unique filename for storage
         file_ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
         unique_filename = f"{uuid.uuid4().hex}.{file_ext}" if file_ext else uuid.uuid4().hex
-        # Storage path: image/{album_id}/{filename}
-        storage_path = f"image/{album_id}/{unique_filename}"
+        # Storage path: photo/photo/image/{album_id}/{filename} (컨테이너 내 경로)
+        storage_path = f"photo/photo/image/{album_id}/{unique_filename}"
         
         try:
             await self.storage.upload_file(
@@ -268,8 +268,8 @@ class PhotoService:
         # Generate unique filename for storage
         file_ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
         unique_filename = f"{uuid.uuid4().hex}.{file_ext}" if file_ext else uuid.uuid4().hex
-        # Storage path: image/{album_id}/{filename}
-        storage_path = f"image/{album_id}/{unique_filename}"
+        # Storage path: photo/photo/image/{album_id}/{filename} (컨테이너 내 경로)
+        storage_path = f"photo/photo/image/{album_id}/{unique_filename}"
         
         # Create photo record in database (pending upload)
         photo = Photo(

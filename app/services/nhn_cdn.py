@@ -129,8 +129,8 @@ class NHNCDNService:
             expires_in = self.settings.nhn_cdn_token_expire_seconds
         
         # CDN 경로 생성 (컨테이너 포함)
-        # Object Storage 경로: image/{album_id}/{filename}
-        # CDN 경로: /{container}/image/{album_id}/{filename}
+        # Object Storage 경로: photo/photo/image/{album_id}/{filename}
+        # CDN 경로: /{container}/photo/photo/image/{album_id}/{filename}
         # 이렇게 하면 CDN 원본 설정에서 경로 변환이 필요 없음
         container = self.settings.nhn_storage_container
         if object_path.startswith("/"):

@@ -1,0 +1,25 @@
+flowchart TB
+    subgraph Upload["Temp URL 업로드"]
+        U1["POST /photos/presigned-url<br/>(JWT, album_id, filename, content_type, file_size)"]
+        U2["API: 검증 + Photo(pending) 생성<br/>+ generate_temp_upload_url()"]
+        U3["응답: upload_url, upload_method, upload_headers"]
+        U4["클라이언트: OPTIONS → PUT upload_url<br/>(파일 바이너리)"]
+        U5["Object Storage: temp_url_sig/expires 검증 후 저장"]
+        U6["POST /photos/confirm (photo_id)"]
+        U7["API: file_exists(HEAD) 확인 후 200"]
+        U1 --> U2 --> U3 --> U4 --> U5 --> U6 --> U7
+    end
+
+    subgraph Download["파일 다운로드 (Temp URL 미사용)"]
+        D1["GET /photos/{id}/image 또는<br/>GET /photos/{id}/download"]
+        D2["API: JWT 검증 + get_photo_by_id"]
+        D3{"CDN 설정?"}
+        D4["302 → CDN URL?token=...<br/>(이미지 보기만)"]
+        D5["백엔드: download_file()<br/>→ Storage GET"]
+        D6["200 + 이미지/첨부 파일"]
+        D1 --> D2 --> D3
+        D3 -->|이미지 + CDN 있음| D4
+        D3 -->|CDN 없음/다운로드 엔드포인트| D5
+        D4 --> D6
+        D5 --> D6
+    end

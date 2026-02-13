@@ -1,0 +1,13 @@
+flowchart LR
+    subgraph Input
+        A[object_name, content_type, expires_in]
+    end
+    subgraph generate_temp_upload_url
+        B["path = /v1/AUTH_{tenant}/{container}/{object_name}"]
+        C["expires = now + expires_in (epoch)"]
+        D["hmac_body = PUT + newline + expires + newline + path"]
+        E["sig = HMAC-SHA256(temp_url_key, hmac_body)"]
+        F["url = endpoint + path + ?temp_url_sig=&temp_url_expires="]
+        G["return { url, method: PUT, headers: { Content-Type } }"]
+    end
+    A --> B --> C --> D --> E --> F --> G

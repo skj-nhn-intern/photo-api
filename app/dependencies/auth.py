@@ -4,13 +4,14 @@ Authentication dependencies for FastAPI.
 import logging
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import AuthService
+from app.utils.prometheus_metrics import active_sessions
 from app.utils.security import decode_access_token
 
 logger = logging.getLogger("app.auth")
@@ -20,6 +21,7 @@ security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -59,6 +61,9 @@ async def get_current_user(
         logger.warning("Auth failed", extra={"event": "auth", "reason": "user_not_found", "user_id": token_payload.sub})
         raise credentials_exception
 
+    # Prometheus: 활성 세션 수 (인증된 요청 처리 중)
+    active_sessions.inc()
+    request.state._active_sessions_metric_inc = True
     return user
 
 

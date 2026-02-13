@@ -1,10 +1,13 @@
 """
 Authentication router for user registration and login.
 """
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.utils.prometheus_metrics import login_duration_seconds
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
 from app.services.auth import AuthService
@@ -76,9 +79,12 @@ async def login(
     as `Bearer <token>` for authenticated endpoints.
     """
     auth_service = AuthService(db)
-    
+    start = time.perf_counter()
     token = await auth_service.login(login_data.email, login_data.password)
-    
+    duration = time.perf_counter() - start
+    result = "success" if token else "failure"
+    login_duration_seconds.labels(result=result).observe(duration)
+
     if not token:
         # 잠재적 문제 로깅 (WARN 레벨) - 무차별 대입 공격 탐지 가능
         log_warning(
@@ -90,13 +96,13 @@ async def login(
             detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # 주요 비즈니스 이벤트 로깅 (INFO 레벨)
     log_info(
         "User login successful",
         event="user_login",
     )
-    
+
     return token
 
 

@@ -287,7 +287,7 @@ async def upload_photo(
     - **title**: Optional title for the photo
     - **description**: Optional description
     
-    The photo will be stored in NHN Cloud Object Storage with path: image/{album_id}/{filename}
+    The photo will be stored in NHN Cloud Object Storage with path: photo/photo/image/{album_id}/{filename}
     Maximum file size: 10MB
     """
     # Read file content first (needed for validation)
