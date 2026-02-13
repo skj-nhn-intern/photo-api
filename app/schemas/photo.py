@@ -76,16 +76,16 @@ class PresignedUrlRequest(BaseModel):
 
 
 class PresignedUrlResponse(BaseModel):
-    """Schema for presigned POST response."""
+    """Schema for upload URL response (Swift Temp URL)."""
     
     photo_id: int = Field(..., description="Photo ID for tracking upload")
-    upload_url: str = Field(..., description="POST 요청을 보낼 URL")
+    upload_url: str = Field(..., description="PUT 요청을 보낼 Temp URL")
     object_key: str = Field(..., description="Object key in storage")
     expires_in: int = Field(..., description="URL expiration time in seconds")
-    upload_method: str = Field(default="POST", description="HTTP method (항상 POST)")
-    upload_fields: dict = Field(
+    upload_method: str = Field(default="PUT", description="HTTP method")
+    upload_headers: dict = Field(
         default_factory=dict,
-        description="FormData에 포함할 필드 (key, policy, signature 등). file 필드를 마지막에 추가하여 POST.",
+        description="PUT 요청 시 사용할 헤더 (Content-Type 등).",
     )
 
 

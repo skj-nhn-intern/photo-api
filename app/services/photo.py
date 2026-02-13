@@ -287,23 +287,23 @@ class PhotoService:
         await self.db.flush()
         await self.db.refresh(photo)
         
-        # Generate presigned POST URL (multipart/form-data → CORS simple request → OPTIONS 없음)
+        # Swift Temp URL 생성 (Swift CORS가 OPTIONS preflight 처리)
         try:
-            presigned_data = self.storage.generate_presigned_upload_url(
+            upload_data = self.storage.generate_temp_upload_url(
                 object_name=storage_path,
                 content_type=content_type,
             )
             
             logger.info(
-                "Presigned POST generated",
+                "Temp upload URL generated",
                 extra={"event": "photo", "photo_id": photo.id, "user_id": user.id}
             )
             
             return {
                 "photo_id": photo.id,
-                "upload_url": presigned_data["url"],
-                "upload_method": presigned_data["method"],
-                "upload_fields": presigned_data.get("fields", {}),
+                "upload_url": upload_data["url"],
+                "upload_method": upload_data["method"],
+                "upload_headers": upload_data.get("headers", {}),
                 "object_key": storage_path,
             }
             

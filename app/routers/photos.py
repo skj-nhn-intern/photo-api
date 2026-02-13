@@ -98,19 +98,19 @@ async def get_presigned_upload_url(
     current_user: User = Depends(get_current_active_user),
 ) -> PresignedUrlResponse:
     """
-    Get a presigned POST policy for direct upload to Object Storage.
+    Get a Swift Temp URL for direct upload to Object Storage.
     
-    클라이언트가 서버를 거치지 않고 **POST + multipart/form-data**로 직접 업로드합니다.
-    POST + multipart/form-data는 CORS "simple request"이므로 OPTIONS preflight가 발생하지 않습니다.
+    클라이언트가 서버를 거치지 않고 직접 Object Storage에 업로드합니다.
+    Swift API 경로를 사용하므로 컨테이너 CORS 설정이 적용되어 브라우저 OPTIONS preflight가 정상 동작합니다.
     
     **사용 방법:**
-    1. 이 엔드포인트를 호출하여 presigned POST 정보를 받습니다.
-    2. `upload_fields`를 FormData에 추가하고, 파일을 **마지막에** 추가하여 POST합니다.
+    1. 이 엔드포인트를 호출하여 업로드 URL을 받습니다.
+    2. 받은 URL로 `upload_headers`와 함께 PUT 요청을 보내 파일을 직접 업로드합니다.
     3. 업로드 완료 후 `/photos/confirm` 엔드포인트를 호출하여 확인합니다.
     
     **업로드 예시 (JavaScript):**
     ```javascript
-    // 1. Presigned POST 받기
+    // 1. 업로드 URL 받기
     const response = await fetch('/photos/presigned-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,12 +123,12 @@ async def get_presigned_upload_url(
     });
     const data = await response.json();
     
-    // 2. FormData 구성 후 Object Storage에 직접 업로드
-    const formData = new FormData();
-    Object.entries(data.upload_fields).forEach(([k, v]) => formData.append(k, v));
-    formData.append('file', fileBlob);  // 반드시 마지막
-    await fetch(data.upload_url, { method: 'POST', body: formData });
-    // ⚠️ Content-Type 헤더 직접 설정 금지 — 브라우저가 boundary 포함하여 자동 설정
+    // 2. Object Storage에 직접 업로드
+    await fetch(data.upload_url, {
+        method: 'PUT',
+        headers: data.upload_headers,
+        body: fileBlob
+    });
     
     // 3. 업로드 완료 확인
     await fetch('/photos/confirm', {
@@ -137,8 +137,6 @@ async def get_presigned_upload_url(
         body: JSON.stringify({ photo_id: data.photo_id })
     });
     ```
-    
-    참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
     """
     # Validate file size
     if request.file_size > MAX_FILE_SIZE:
@@ -196,7 +194,7 @@ async def get_presigned_upload_url(
             object_key=upload_data["object_key"],
             expires_in=settings.nhn_s3_presigned_url_expire_seconds,
             upload_method=upload_data["upload_method"],
-            upload_fields=upload_data.get("upload_fields", {}),
+            upload_headers=upload_data.get("upload_headers", {}),
         )
         
     except ValueError as e:
