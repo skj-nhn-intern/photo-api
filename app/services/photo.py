@@ -287,7 +287,7 @@ class PhotoService:
         await self.db.flush()
         await self.db.refresh(photo)
         
-        # Generate presigned URL
+        # Generate presigned POST URL (multipart/form-data → CORS simple request → OPTIONS 없음)
         try:
             presigned_data = self.storage.generate_presigned_upload_url(
                 object_name=storage_path,
@@ -295,7 +295,7 @@ class PhotoService:
             )
             
             logger.info(
-                "Presigned URL generated",
+                "Presigned POST generated",
                 extra={"event": "photo", "photo_id": photo.id, "user_id": user.id}
             )
             
@@ -303,7 +303,7 @@ class PhotoService:
                 "photo_id": photo.id,
                 "upload_url": presigned_data["url"],
                 "upload_method": presigned_data["method"],
-                "upload_headers": presigned_data["headers"],
+                "upload_fields": presigned_data.get("fields", {}),
                 "object_key": storage_path,
             }
             

@@ -6,7 +6,10 @@ Handles file upload, download, and deletion from Object Storage.
 S3 API 참조: https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
 """
 import asyncio
+import hashlib
+import hmac
 import logging
+import time as _time
 from typing import Optional, Dict
 from datetime import datetime, timedelta
 
@@ -558,29 +561,33 @@ class NHNObjectStorageService:
         object_name: str,
         content_type: str,
         expires_in: Optional[int] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, any]:
         """
-        Generate a presigned URL for direct upload to Object Storage.
+        Generate a presigned POST for direct upload to Object Storage.
+        
+        POST + multipart/form-data는 CORS "simple request"이므로
+        브라우저가 OPTIONS preflight를 보내지 않아 SignatureDoesNotMatch 문제가 없음.
+        (NHN Cloud S3 API는 PutBucketCors 미지원이라 PUT presigned URL은 CORS 실패)
         
         NHN Cloud S3 API 참조:
         https://docs.nhncloud.com/ko/Storage/Object%20Storage/ko/s3-api-guide/
         
         Args:
-            object_name: The name/path of the object in storage (예: photos/1/abc123.jpg)
+            object_name: The name/path of the object in storage (예: image/1/abc123.jpg)
             content_type: MIME type of the file
             expires_in: URL expiration time in seconds (default: from settings)
             
         Returns:
-            Dictionary with 'url' and 'fields' for the upload
+            Dictionary with 'url', 'method', and 'fields' for the upload
             
-        Example:
-            >>> service = get_storage_service()
-            >>> result = service.generate_presigned_upload_url(
-            ...     "photos/1/test.jpg",
-            ...     "image/jpeg",
-            ...     expires_in=3600
-            ... )
-            >>> print(result['url'])  # Use this URL for PUT request
+        Example (Frontend):
+            ```javascript
+            const formData = new FormData();
+            Object.entries(data.upload_fields).forEach(([k, v]) => formData.append(k, v));
+            formData.append('file', file);  // 반드시 마지막
+            await fetch(data.upload_url, { method: 'POST', body: formData });
+            // Content-Type 헤더 설정 금지 — 브라우저가 multipart/form-data boundary 자동 설정
+            ```
         """
         if expires_in is None:
             expires_in = self.settings.nhn_s3_presigned_url_expire_seconds
@@ -589,40 +596,113 @@ class NHNObjectStorageService:
         s3_client = self._get_s3_client()
         
         try:
-            # Presigned URL for PUT only. 이미지 보기는 S3 GET presigned 미사용 (CDN Auth Token 또는 백엔드 스트리밍).
-            url = s3_client.generate_presigned_url(
-                ClientMethod='put_object',
-                Params={
-                    'Bucket': container,
-                    'Key': object_name,
-                    'ContentType': content_type,
-                },
+            # generate_presigned_post: POST + multipart/form-data (CORS simple request → OPTIONS 없음)
+            # 이미지 보기는 S3 GET presigned 미사용 (CDN Auth Token 또는 백엔드 스트리밍).
+            response = s3_client.generate_presigned_post(
+                Bucket=container,
+                Key=object_name,
+                Fields={"Content-Type": content_type},
+                Conditions=[
+                    {"Content-Type": content_type},
+                    ["content-length-range", 1, 100 * 1024 * 1024],  # 100MB
+                ],
                 ExpiresIn=expires_in,
-                HttpMethod='PUT'
             )
             
             return {
-                'url': url,
-                'method': 'PUT',
-                'headers': {
-                    'Content-Type': content_type,
-                }
+                "url": response["url"],
+                "method": "POST",
+                "fields": response["fields"],
             }
             
         except ClientError as e:
             logger.error(
-                "Presigned URL generation failed",
+                "Presigned POST generation failed",
                 exc_info=e,
                 extra={"event": "storage", "object": object_name}
             )
-            raise Exception(f"Failed to generate presigned URL: {str(e)}")
+            raise Exception(f"Failed to generate presigned POST: {str(e)}")
         except Exception as e:
             logger.error(
-                "Presigned URL generation failed",
+                "Presigned POST generation failed",
                 exc_info=e,
                 extra={"event": "storage", "object": object_name}
             )
-            raise Exception(f"Failed to generate presigned URL: {str(e)}")
+            raise Exception(f"Failed to generate presigned POST: {str(e)}")
+    
+    def generate_temp_upload_url(
+        self,
+        object_name: str,
+        content_type: str,
+        expires_in: Optional[int] = None,
+    ) -> Dict[str, str]:
+        """
+        Generate a Swift Temp URL for direct upload to Object Storage.
+        
+        S3 presigned URL과 달리 Swift API 경로(/v1/AUTH_xxx/...)를 사용하므로
+        컨테이너의 CORS 설정(X-Container-Meta-Access-Control-Allow-Origin)이 적용되어
+        브라우저 OPTIONS preflight가 정상 처리됩니다.
+        
+        사전 설정 (1회):
+        1. 컨테이너에 Temp URL Key 등록:
+           curl -X POST -H "X-Auth-Token: {token}" \\
+                -H "X-Container-Meta-Temp-URL-Key: {key}" \\
+                https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_{tenant_id}/{container}
+        2. 컨테이너 CORS 허용:
+           curl -X POST -H "X-Auth-Token: {token}" \\
+                -H "X-Container-Meta-Access-Control-Allow-Origin: *" \\
+                https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_{tenant_id}/{container}
+        3. 환경변수 NHN_STORAGE_TEMP_URL_KEY 설정
+        
+        Args:
+            object_name: Object path (예: image/1/abc123.jpg)
+            content_type: MIME type of the file
+            expires_in: URL expiration time in seconds
+            
+        Returns:
+            Dictionary with 'url', 'method', and 'headers'
+        """
+        if expires_in is None:
+            expires_in = self.settings.nhn_s3_presigned_url_expire_seconds
+        
+        temp_url_key = self.settings.nhn_storage_temp_url_key
+        if not temp_url_key:
+            raise Exception(
+                "Swift Temp URL Key not configured. "
+                "Set NHN_STORAGE_TEMP_URL_KEY and register it on the container."
+            )
+        
+        tenant_id = self.settings.nhn_storage_tenant_id
+        if not tenant_id:
+            raise Exception(
+                "Tenant ID not configured. Set NHN_STORAGE_TENANT_ID."
+            )
+        
+        container = self.settings.nhn_storage_container
+        
+        # Swift API path: /v1/AUTH_{tenant_id}/{container}/{object_name}
+        path = f"/v1/AUTH_{tenant_id}/{container}/{object_name}"
+        
+        # HMAC-SHA256 서명: "PUT\n{expires_epoch}\n{path}"
+        expires = int(_time.time()) + expires_in
+        hmac_body = f"PUT\n{expires}\n{path}"
+        sig = hmac.new(
+            temp_url_key.encode("utf-8"),
+            hmac_body.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        
+        # S3 endpoint와 같은 호스트에서 Swift API도 서빙됨
+        endpoint = self.settings.nhn_s3_endpoint_url.rstrip("/")
+        url = f"{endpoint}{path}?temp_url_sig={sig}&temp_url_expires={expires}"
+        
+        return {
+            "url": url,
+            "method": "PUT",
+            "headers": {
+                "Content-Type": content_type,
+            },
+        }
 
 
 # Singleton instance

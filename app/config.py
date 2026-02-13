@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     nhn_s3_region_name: str = Field(default="kr1", description="S3 Region Name")
     nhn_s3_presigned_url_expire_seconds: int = Field(default=3600, description="Presigned URL 유효 시간 (초)")
     
+    # Swift Temp URL (S3 presigned 대체 — CORS preflight 정상 동작)
+    # 컨테이너에 Temp URL Key를 먼저 설정해야 함:
+    #   curl -X POST -H "X-Auth-Token: {token}" \
+    #        -H "X-Container-Meta-Temp-URL-Key: {your_secret_key}" \
+    #        https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_{tenant_id}/{container}
+    nhn_storage_temp_url_key: str = Field(
+        default="",
+        description="Swift Temp URL Key. 설정 시 S3 presigned 대신 Swift Temp URL 사용 (CORS 호환)"
+    )
+    
     # NHN Cloud CDN (Auth Token API)
     # https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-token-api
     nhn_cdn_domain: str = Field(default="", description="CDN 도메인 (예: xxx.toastcdn.net)")
