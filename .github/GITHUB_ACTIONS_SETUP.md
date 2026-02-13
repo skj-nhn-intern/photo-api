@@ -235,6 +235,17 @@ curl -s -H "X-Auth-Token: $TOKEN" \
 
 **해결**: CI는 이 경우 **Block Storage(Volume) API**로 루트 볼륨을 이미지에 업로드하는 방식으로 대체 시도합니다. `create_build_instance` 단계에서 토큰의 서비스 카탈로그에 **volume** 서비스가 있으면 `volume_url`을 출력하고, `create_image` 단계에서 400 시 해당 URL로 `os-volume_upload_image`를 호출합니다. NHN에서 Volume API를 제공하지 않거나 실패하면 콘솔에서 수동으로 이미지를 만들거나 [Image Builder](https://docs.nhncloud.com/ko/Compute/Image%20Builder/ko/overview/)를 사용하세요.
 
+### 401 Unauthorized (Presigned/Temp URL 업로드)
+
+**증상**: Object Storage로 PUT 요청 시 `401 Unauthorized`
+
+**원인 중 하나**: 서버 시간이 실제 시간과 크게 어긋나면 Temp URL의 `temp_url_expires` 서명 검증이 실패합니다.
+
+**해결 방법**:
+1. **서버 시간 확인**: 인스턴스에서 `date -u` 또는 `timedatectl`로 시간·타임존을 확인합니다.
+2. **NTP 활성화**: 이 워크플로우가 만드는 이미지에는 빌드 시 `timedatectl set-ntp true`가 적용되어 있습니다. 프로덕션 인스턴스에서 NTP가 꺼져 있다면 `sudo timedatectl set-ntp true`로 활성화하세요.
+3. **CI에서 검증**: "Check server time sync" 단계에서 러너와 테스트 인스턴스의 시간 차가 120초를 넘으면 실패합니다. 실패 시 해당 인스턴스의 NTP·타임존을 점검하세요.
+
 ### Health Check 실패
 
 **증상**: "Test image with curl" 단계에서 실패

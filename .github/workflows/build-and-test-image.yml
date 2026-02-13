@@ -354,6 +354,26 @@ jobs:
           echo "⏳ 서비스 시작 대기 중..."
           sleep 60  # systemd 서비스가 부팅 시 자동 시작되도록 대기
 
+      - name: Check server time sync (Temp URL 검증용)
+        run: |
+          echo "🕐 서버 시간 오차 확인 중 (Temp URL 서명 검증을 위해 중요)..."
+          RUNNER_EPOCH=$(date +%s)
+          INSTANCE_IP="${{ steps.test_instance.outputs.test_instance_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}"
+          INSTANCE_EPOCH=$(ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "date +%s" 2>/dev/null || echo "0")
+          if [ "$INSTANCE_EPOCH" = "0" ]; then
+            echo "::warning::인스턴스 시간 조회 실패. NTP 동기화는 이미지 빌드 시 활성화되어 있습니다."
+            exit 0
+          fi
+          DIFF=$((RUNNER_EPOCH > INSTANCE_EPOCH ? RUNNER_EPOCH - INSTANCE_EPOCH : INSTANCE_EPOCH - RUNNER_EPOCH))
+          MAX_DRIFT=120
+          if [ "$DIFF" -gt "$MAX_DRIFT" ]; then
+            echo "::error::서버 시간 오차가 ${DIFF}초입니다 (허용: ${MAX_DRIFT}초). Temp URL 401 원인일 수 있습니다. NTP/타임존을 확인하세요."
+            echo "Runner epoch: $RUNNER_EPOCH, Instance epoch: $INSTANCE_EPOCH"
+            exit 1
+          fi
+          echo "✅ 서버 시간 오차 ${DIFF}초 (허용 범위 내)"
+
       - name: Test image with curl (KR1만)
         run: |
           echo "🧪 이미지 테스트 중 (KR1, 실제 실행 테스트만)..."

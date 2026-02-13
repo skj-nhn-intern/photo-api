@@ -11,6 +11,7 @@ import hmac
 import logging
 import time as _time
 from typing import Optional, Dict
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 
 import httpx
@@ -692,9 +693,12 @@ class NHNObjectStorageService:
             hashlib.sha256,
         ).hexdigest()
         
-        # S3 endpoint와 같은 호스트에서 Swift API도 서빙됨
-        endpoint = self.settings.nhn_s3_endpoint_url.rstrip("/")
-        url = f"{endpoint}{path}?temp_url_sig={sig}&temp_url_expires={expires}"
+        # S3 endpoint와 같은 호스트에서 Swift API도 서빙됨.
+        # 엔드포인트에 경로가 포함되어 있으면 path가 중복되어 401 발생하므로 origin만 사용.
+        endpoint_raw = (self.settings.nhn_s3_endpoint_url or "").strip().rstrip("/")
+        parsed = urlparse(endpoint_raw)
+        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else endpoint_raw
+        url = f"{base_url}{path}?temp_url_sig={sig}&temp_url_expires={expires}"
         
         return {
             "url": url,
