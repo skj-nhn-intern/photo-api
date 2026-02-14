@@ -113,6 +113,12 @@ class NHNCDNService:
         """
         Generate a CDN URL with Auth Token for secure access.
         이미지 보기는 이 CDN Auth Token URL 또는 백엔드 스트리밍만 사용 (S3 GET presigned 미사용).
+        
+        **보안 보장:**
+        - OBS URL을 절대 반환하지 않음
+        - CDN Auth Token이 포함된 URL만 반환
+        - 토큰이 없으면 CDN이 자동으로 접근 거부 (403 Forbidden)
+        - 토큰은 짧은 유효기간을 가짐 (기본 120초)
 
         Args:
             object_path: The path to the object in storage (e.g., "image/2/uuid.png")
@@ -120,6 +126,7 @@ class NHNCDNService:
 
         Returns:
             CDN URL with auth token, or None if CDN 미설정 or 토큰 발급 실패 (호출자는 스트리밍 fallback)
+            ⚠️ 절대 OBS URL을 반환하지 않음. None 반환 시 백엔드 스트리밍 사용.
         """
         # CDN 미설정 시 None → 라우터에서 리다이렉트하지 않고 백엔드 스트리밍
         if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
@@ -169,12 +176,21 @@ class NHNCDNService:
     ) -> str:
         """
         동기 버전: CDN URL 생성 (토큰 없이, Object Storage fallback)
-        PhotoService.get_photo_with_url에서 동기적으로 호출할 때 사용
+        ⚠️ 주의: 이 메서드는 현재 사용되지 않습니다.
+        PhotoService.get_photo_with_url는 항상 상대 경로(/photos/{id}/image)만 반환합니다.
         
-        CDN App Key가 없으면 Object Storage URL 반환
+        이 메서드는 레거시 코드이거나 향후 사용을 위해 남겨둔 것입니다.
+        보안을 위해 OBS URL을 반환하지 않도록 주의하세요.
+        
+        CDN App Key가 없으면 Object Storage URL 반환 (보안 위험!)
         """
         # CDN 설정이 없으면 Object Storage URL 반환
+        # ⚠️ 보안 경고: OBS URL을 반환하면 public OBS에 직접 접근 가능
         if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
+            logger.warning(
+                "generate_auth_token_url_sync: OBS URL 반환 (보안 위험)",
+                extra={"event": "cdn", "path": object_path}
+            )
             return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
         
         # CDN 경로 생성 (컨테이너 포함)
@@ -196,6 +212,11 @@ class NHNCDNService:
                 return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
         
         # 캐시에 없으면 Object Storage URL 반환 (비동기 토큰 생성 필요)
+        # ⚠️ 보안 경고: OBS URL을 반환하면 public OBS에 직접 접근 가능
+        logger.warning(
+            "generate_auth_token_url_sync: OBS URL 반환 (보안 위험, 토큰 캐시 없음)",
+            extra={"event": "cdn", "path": object_path}
+        )
         return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
 
 

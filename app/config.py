@@ -124,6 +124,28 @@ class Settings(BaseSettings):
         description="이미지 302 리다이렉트 시 CDN 토큰 유효 시간(초).",
     )
     
+    # Rate Limiting
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description="Rate limiting 활성화 여부",
+    )
+    rate_limit_per_minute: int = Field(
+        default=60,
+        description="IP당 분당 요청 수 제한 (일반 엔드포인트)",
+    )
+    rate_limit_share_per_minute: int = Field(
+        default=10,
+        description="IP당 분당 요청 수 제한 (공유 링크 엔드포인트)",
+    )
+    rate_limit_image_per_minute: int = Field(
+        default=120,
+        description="IP당 분당 요청 수 제한 (이미지 접근 엔드포인트)",
+    )
+    rate_limit_burst: int = Field(
+        default=10,
+        description="Rate limit 버스트 허용량",
+    )
+    
     # NHN Cloud Log & Crash
     nhn_log_appkey: str = Field(default="")
     nhn_log_url: str = Field(
