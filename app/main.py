@@ -31,6 +31,7 @@ from app.utils.prometheus_metrics import (
     setup_prometheus,
     pushgateway_loop,
 )
+from app.middlewares.rate_limit_middleware import setup_rate_limit_exception_handler
 from app.services.nhn_logger import get_logger_service
 from app.utils.logger import setup_logging, get_request_id, log_error, log_info
 from app.middlewares.logging_middleware import LoggingMiddleware
@@ -199,6 +200,9 @@ Use the `/auth/login` endpoint to get a token.
 
 # Prometheus: FastAPI metrics + node info at /metrics
 setup_prometheus(app)
+
+# Rate limiting: 예외 처리 핸들러 등록
+setup_rate_limit_exception_handler(app)
 
 # Configure CORS
 app.add_middleware(

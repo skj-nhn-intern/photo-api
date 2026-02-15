@@ -25,12 +25,16 @@ from fastapi import Request
 logger = logging.getLogger("app.share")
 router = APIRouter(prefix="/share", tags=["Shared Albums"])
 
+# Rate limiting 설정
+share_rate_limit = get_rate_limit_decorator(f"{get_settings().rate_limit_share_per_minute}/minute")
+
 
 @router.get(
     "/{token}",
     response_model=SharedAlbumResponse,
     summary="Access shared album",
 )
+@share_rate_limit
 async def get_shared_album(
     token: str,
     request: Request,
@@ -47,7 +51,17 @@ async def get_shared_album(
     The CDN URLs include auth tokens that expire after a configured time.
     """
     start_time = time.perf_counter()
+<<<<<<< HEAD
     client_id = get_client_ip(request)
+=======
+    client_id = get_client_identifier(request)
+    
+    # 메트릭 수집: Rate limit 체크 요청 (허용됨)
+    rate_limit_requests_total.labels(
+        endpoint=request.url.path,
+        status="allowed",
+    ).inc()
+>>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
     
     album_service = AlbumService(db)
     share_link = await album_service.get_share_link_by_token(token)
@@ -98,6 +112,7 @@ async def get_shared_album(
     "/{token}/photos/{photo_id}/image",
     summary="Shared album image (no auth); redirects to CDN when configured",
 )
+@share_rate_limit
 async def get_shared_album_image(
     token: str,
     photo_id: int,
@@ -108,6 +123,12 @@ async def get_shared_album_image(
     공유 앨범 이미지 접근. **인증 불필요**. 공유 링크 유효 시 해당 앨범에 포함된 사진만 접근 가능.
     CDN 설정 시 짧은 유효기간 URL로 302 리다이렉트하여 트래픽이 LB를 거치지 않도록 함.
     """
+    # 메트릭 수집: Rate limit 체크 요청 (허용됨)
+    rate_limit_requests_total.labels(
+        endpoint=request.url.path,
+        status="allowed",
+    ).inc()
+    
     settings = get_settings()
     album_service = AlbumService(db)
     share_link = await album_service.get_share_link_by_token(token)

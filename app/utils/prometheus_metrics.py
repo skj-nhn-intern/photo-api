@@ -75,6 +75,24 @@ active_sessions = Gauge(
     registry=REGISTRY,
 )
 
+<<<<<<< HEAD
+=======
+# --- Rate Limiting ---
+rate_limit_hits_total = Counter(
+    "photo_api_rate_limit_hits_total",
+    "Total number of rate limit hits (requests blocked)",
+    ["endpoint", "client_id"],  # client_id는 IP 주소 일부 (개인정보 보호)
+    registry=REGISTRY,
+)
+
+rate_limit_requests_total = Counter(
+    "photo_api_rate_limit_requests_total",
+    "Total number of requests checked for rate limiting",
+    ["endpoint", "status"],  # status: allowed | blocked
+    registry=REGISTRY,
+)
+
+>>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
 # --- Share Link Access Patterns ---
 share_link_access_total = Counter(
     "photo_api_share_link_access_total",
@@ -121,6 +139,7 @@ image_access_duration_seconds = Histogram(
     registry=REGISTRY,
 )
 
+<<<<<<< HEAD
 # --- Health Check ---
 health_check_status = Gauge(
     "photo_api_health_check_status",
@@ -157,6 +176,8 @@ db_pool_waiting_requests = Gauge(
     registry=REGISTRY,
 )
 
+=======
+>>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
 # --- Photo Upload Metrics ---
 photo_upload_total = Counter(
     "photo_api_photo_upload_total",

@@ -459,4 +459,7 @@ sum(rate(photo_api_image_access_total[5m])) * 100
 - [Prometheus 쿼리 가이드](https://prometheus.io/docs/prometheus/latest/querying/basics/)
 - [Grafana 대시보드 가이드](https://grafana.com/docs/grafana/latest/dashboards/)
 - [Alertmanager 설정 가이드](https://prometheus.io/docs/alerting/latest/alertmanager/)
+<<<<<<< HEAD
 
+=======
+>>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
