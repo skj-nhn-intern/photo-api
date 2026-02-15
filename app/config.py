@@ -124,6 +124,7 @@ class Settings(BaseSettings):
         description="이미지 302 리다이렉트 시 CDN 토큰 유효 시간(초).",
     )
     
+    
     # NHN Cloud Log & Crash
     nhn_log_appkey: str = Field(default="")
     nhn_log_url: str = Field(
@@ -160,6 +161,70 @@ class Settings(BaseSettings):
     log_timezone: str = Field(default="Asia/Seoul", description="로그 timestamp 타임존 (IANA). 빈 문자열이면 UTC")
     # 로그 디렉터리. 비우면 /var/log/photo-api 사용, 쓰기 실패 시 ./logs 로 fallback
     log_dir: str = Field(default="", description="로그 파일 디렉터리 (비우면 /var/log/photo-api, 권한 없으면 ./logs)")
+    
+    # HTTP Client Timeouts (초)
+    http_timeout_connect: float = Field(
+        default=10.0,
+        description="HTTP connection timeout (seconds)"
+    )
+    http_timeout_read: float = Field(
+        default=30.0,
+        description="HTTP read timeout (seconds)"
+    )
+    http_timeout_write: float = Field(
+        default=30.0,
+        description="HTTP write timeout (seconds)"
+    )
+    
+    # External Service Timeouts (초)
+    storage_auth_timeout: float = Field(
+        default=30.0,
+        description="Object Storage authentication timeout (seconds)"
+    )
+    storage_upload_timeout: float = Field(
+        default=60.0,
+        description="Object Storage upload timeout (seconds)"
+    )
+    storage_download_timeout: float = Field(
+        default=60.0,
+        description="Object Storage download timeout (seconds)"
+    )
+    cdn_timeout: float = Field(
+        default=10.0,
+        description="CDN API timeout (seconds)"
+    )
+    log_service_timeout: float = Field(
+        default=10.0,
+        description="Log service timeout (seconds)"
+    )
+    
+    # Database Connection Pool
+    db_pool_size: int = Field(
+        default=5,
+        description="Database connection pool size"
+    )
+    db_max_overflow: int = Field(
+        default=10,
+        description="Database connection pool max overflow"
+    )
+    db_pool_timeout: int = Field(
+        default=30,
+        description="Database connection pool timeout (seconds)"
+    )
+    db_pool_recycle: int = Field(
+        default=1800,
+        description="Database connection pool recycle time (seconds)"
+    )
+    
+    # Retry Configuration
+    retry_max_attempts_storage: int = Field(
+        default=3,
+        description="Maximum retry attempts for Object Storage operations"
+    )
+    retry_max_attempts_cdn: int = Field(
+        default=2,
+        description="Maximum retry attempts for CDN operations"
+    )
     
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")

@@ -8,9 +8,11 @@ Main application entry point that configures:
 - Logging system
 - Exception handlers
 - Prometheus metrics (스크래핑 + 선택적 Pushgateway)
+- Graceful shutdown (Autoscaling 환경 최적화)
 """
 import asyncio
 import logging
+import signal
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -22,6 +24,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.routers import auth_router, photos_router, albums_router, share_router
+from app.routers.health import router as health_router
 from app.utils.prometheus_metrics import (
     exceptions_total,
     ready,
@@ -32,6 +35,7 @@ from app.services.nhn_logger import get_logger_service
 from app.utils.logger import setup_logging, get_request_id, log_error, log_info
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.active_sessions_middleware import ActiveSessionsMiddleware
+from app.middlewares.request_tracking_middleware import RequestTrackingMiddleware
 from app.utils.client_ip import get_client_ip, get_forwarded_proto, get_forwarded_host
 
 settings = get_settings()
@@ -41,9 +45,76 @@ logger = logging.getLogger("app")
 setup_logging()
 
 
+# 진행 중인 요청 추적 (Graceful shutdown용)
+# Thread-safe를 위해 asyncio.Lock 사용
+_in_flight_requests = 0
+_in_flight_requests_lock = asyncio.Lock()
+shutdown_event = asyncio.Event()
+
+
+async def increment_in_flight_requests():
+    """진행 중인 요청 수 증가."""
+    global _in_flight_requests
+    async with _in_flight_requests_lock:
+        _in_flight_requests += 1
+    return _in_flight_requests
+
+
+async def decrement_in_flight_requests():
+    """진행 중인 요청 수 감소."""
+    global _in_flight_requests
+    async with _in_flight_requests_lock:
+        _in_flight_requests = max(0, _in_flight_requests - 1)
+    return _in_flight_requests
+
+
+def get_in_flight_requests() -> int:
+    """현재 진행 중인 요청 수 반환."""
+    return _in_flight_requests
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    """Application lifespan: startup / shutdown."""
+    """
+    Application lifespan with graceful shutdown for autoscaling.
+    
+    Graceful shutdown 흐름:
+    1. SIGTERM/SIGINT 수신
+    2. Health check 즉시 실패 (ready=0)
+    3. 로드밸런서가 새 요청 차단
+    4. 진행 중인 요청 완료 대기 (최대 30초)
+    5. 백그라운드 작업 종료
+    6. 리소스 정리
+    """
+    # Signal handlers (SIGTERM, SIGINT)
+    loop = asyncio.get_event_loop()
+    
+    def signal_handler():
+        """Handle shutdown signals."""
+        shutdown_event.set()
+        log_info("Shutdown signal received", event="lifecycle")
+    
+    # Unix 시스템에서만 signal handler 등록
+    if hasattr(signal, 'SIGTERM'):
+        loop.add_signal_handler(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGINT'):
+        loop.add_signal_handler(signal.SIGINT, signal_handler)
+    
+    # Startup
+    # 설정 검증 (프로덕션 환경에서만)
+    if settings.is_production:
+        from app.utils.config_validator import validate_all_config
+        config_ok, config_errors = await validate_all_config()
+        if not config_ok:
+            error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in config_errors)
+            log_error(
+                "Startup failed: configuration validation errors",
+                error_message=error_msg,
+                event="lifecycle",
+            )
+            raise RuntimeError(error_msg)
+        log_info("Configuration validation passed", event="lifecycle")
+    
     ready.set(1)
     log_info(
         "Application startup completed",
@@ -60,16 +131,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     yield
 
+    # Graceful shutdown
+    ready.set(0)  # Health check 즉시 실패 (로드밸런서가 새 요청 차단)
+    log_info("Application shutdown initiated", event="lifecycle")
+    
+    # 진행 중인 요청 완료 대기 (최대 30초)
+    max_wait = 30.0
+    start_wait = time.time()
+    while time.time() - start_wait < max_wait:
+        current_count = get_in_flight_requests()
+        if current_count == 0:
+            log_info(f"All requests completed ({current_count} in-flight)", event="lifecycle")
+            break
+        await asyncio.sleep(0.5)
+        if shutdown_event.is_set():
+            log_info(f"Shutdown timeout reached, {current_count} requests still in-flight", event="lifecycle")
+            break
+    
+    # 백그라운드 작업 종료
     pushgateway_task.cancel()
     try:
         await pushgateway_task
     except asyncio.CancelledError:
         pass
-
-    ready.set(0)
-    log_info("Application shutdown initiated", event="lifecycle")
+    
+    # 로그 플러시
     await logger_service.stop()
+    
+    # DB 연결 종료
     await close_db()
+    
+    log_info("Graceful shutdown completed", event="lifecycle")
 
 
 # Create FastAPI application
@@ -121,6 +213,8 @@ app.add_middleware(
 app.add_middleware(LoggingMiddleware)
 # 활성 세션 수: 인증된 요청 종료 시 Gauge 감소
 app.add_middleware(ActiveSessionsMiddleware)
+# 진행 중인 요청 추적: Graceful shutdown을 위한 요청 카운트
+app.add_middleware(RequestTrackingMiddleware)
 
 
 # Global exception handler
@@ -160,6 +254,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers
+app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(photos_router)
 app.include_router(albums_router)
@@ -183,18 +278,6 @@ async def root():
     }
 
 
-# Health check endpoint
-@app.get(
-    "/health",
-    tags=["Health"],
-    summary="Health check",
-)
-async def health_check():
-    """
-    Health check endpoint for load balancer.
-    Returns 200 OK if the service is running.
-    """
-    return {"status": "healthy"}
 
 
 # Debug endpoint for client IP

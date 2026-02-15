@@ -75,6 +75,141 @@ active_sessions = Gauge(
     registry=REGISTRY,
 )
 
+# --- Share Link Access Patterns ---
+share_link_access_total = Counter(
+    "photo_api_share_link_access_total",
+    "Total number of share link access attempts",
+    ["token_status", "result"],  # token_status: valid | invalid | expired, result: success | denied
+    registry=REGISTRY,
+)
+
+share_link_brute_force_attempts = Counter(
+    "photo_api_share_link_brute_force_attempts_total",
+    "Total number of brute force attempts on share links (invalid token attempts)",
+    ["client_id"],  # client_id는 IP 주소 일부
+    registry=REGISTRY,
+)
+
+share_link_access_duration_seconds = Histogram(
+    "photo_api_share_link_access_duration_seconds",
+    "Share link access request duration in seconds",
+    ["token_status", "result"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    registry=REGISTRY,
+)
+
+share_link_image_access_total = Counter(
+    "photo_api_share_link_image_access_total",
+    "Total number of share link image access attempts",
+    ["token_status", "photo_in_album"],  # photo_in_album: yes | no
+    registry=REGISTRY,
+)
+
+# --- Image Access Patterns ---
+image_access_total = Counter(
+    "photo_api_image_access_total",
+    "Total number of image access attempts",
+    ["access_type", "result"],  # access_type: authenticated | shared, result: success | denied
+    registry=REGISTRY,
+)
+
+image_access_duration_seconds = Histogram(
+    "photo_api_image_access_duration_seconds",
+    "Image access request duration in seconds",
+    ["access_type", "result"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    registry=REGISTRY,
+)
+
+# --- Health Check ---
+health_check_status = Gauge(
+    "photo_api_health_check_status",
+    "Health check status (1=healthy, 0=unhealthy)",
+    ["check"],  # check: database | object_storage | overall
+    registry=REGISTRY,
+)
+
+# --- Circuit Breaker ---
+circuit_breaker_state = Gauge(
+    "photo_api_circuit_breaker_state",
+    "Circuit breaker state (1=current state, 0=other states)",
+    ["service", "state"],  # service: nhn_storage | nhn_cdn, state: closed | open | half_open
+    registry=REGISTRY,
+)
+
+# --- Request Tracking ---
+in_flight_requests_metric = Gauge(
+    "photo_api_in_flight_requests",
+    "Number of in-flight requests (for graceful shutdown)",
+    registry=REGISTRY,
+)
+
+# --- DB Connection Pool ---
+db_pool_active_connections = Gauge(
+    "photo_api_db_pool_active_connections",
+    "Number of active database connections in pool",
+    registry=REGISTRY,
+)
+
+db_pool_waiting_requests = Gauge(
+    "photo_api_db_pool_waiting_requests",
+    "Number of requests waiting for database connection",
+    registry=REGISTRY,
+)
+
+# --- Photo Upload Metrics ---
+photo_upload_total = Counter(
+    "photo_api_photo_upload_total",
+    "Total number of photo upload attempts",
+    ["upload_method", "result"],  # upload_method: presigned | direct, result: success | failure
+    registry=REGISTRY,
+)
+
+photo_upload_file_size_bytes = Histogram(
+    "photo_api_photo_upload_file_size_bytes",
+    "Photo upload file size in bytes",
+    ["upload_method"],
+    buckets=(1024, 10240, 102400, 512000, 1024000, 2048000, 5120000, 10240000),  # 1KB to 10MB
+    registry=REGISTRY,
+)
+
+presigned_url_generation_total = Counter(
+    "photo_api_presigned_url_generation_total",
+    "Total number of presigned URL generation attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
+photo_upload_confirm_total = Counter(
+    "photo_api_photo_upload_confirm_total",
+    "Total number of photo upload confirmation attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
+# --- Album Metrics ---
+album_operations_total = Counter(
+    "photo_api_album_operations_total",
+    "Total number of album operations",
+    ["operation", "result"],  # operation: create | update | delete, result: success | failure
+    registry=REGISTRY,
+)
+
+album_photo_operations_total = Counter(
+    "photo_api_album_photo_operations_total",
+    "Total number of album photo operations",
+    ["operation", "result"],  # operation: add | remove, result: success | failure
+    registry=REGISTRY,
+)
+
+# --- Share Link Creation Metrics ---
+share_link_creation_total = Counter(
+    "photo_api_share_link_creation_total",
+    "Total number of share link creation attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
 
 class LogQueueSizeCollector:
     """Collector that reports NHN logger queue size (backpressure indicator)."""

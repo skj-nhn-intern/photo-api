@@ -22,6 +22,8 @@ from botocore.exceptions import ClientError
 from app.config import get_settings
 from app.utils.prometheus_metrics import record_external_request
 from app.utils.logger import log_error, log_warning
+from app.utils.retry import retry_with_backoff, DEFAULT_RETRYABLE_EXCEPTIONS
+from app.utils.circuit_breaker import get_storage_circuit_breaker
 
 logger = logging.getLogger("app.storage")
 
@@ -107,13 +109,28 @@ class NHNObjectStorageService:
             }
             
             try:
-                async with record_external_request("nhn_storage"):
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        response = await client.post(
-                            auth_url,
-                            json=auth_data,
-                            headers={"Content-Type": "application/json"},
-                        )
+                # Circuit Breaker와 재시도 로직 적용
+                breaker = get_storage_circuit_breaker()
+                
+                async def _auth_request():
+                    async with record_external_request("nhn_storage"):
+                        async with httpx.AsyncClient(timeout=self.settings.storage_auth_timeout) as client:
+                            response = await client.post(
+                                auth_url,
+                                json=auth_data,
+                                headers={"Content-Type": "application/json"},
+                            )
+                            response.raise_for_status()
+                            return response
+                
+                # Circuit Breaker + 재시도 적용
+                response = await breaker.call(
+                    retry_with_backoff,
+                    _auth_request,
+                    max_retries=self.settings.retry_max_attempts_storage,
+                    initial_delay=1.0,
+                    retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
+                )
                     
                     # 응답 상태 코드 확인
                     status_code = response.status_code
@@ -337,39 +354,43 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    # PUT 메서드로 오브젝트 업로드
-                    response = await client.put(
-                        url,
-                        content=file_content,
-                        headers={
-                            "X-Auth-Token": token,
-                            "Content-Type": content_type,
-                        },
-                    )
-
-                    if response.status_code not in (200, 201):
-                        logger.error(
-                            "File upload failed",
-                            extra={"event": "storage", "status": response.status_code, "object": object_name},
+            # Circuit Breaker와 재시도 로직 적용
+            breaker = get_storage_circuit_breaker()
+            
+            async def _upload_request():
+                async with record_external_request("nhn_storage"):
+                    async with httpx.AsyncClient(timeout=self.settings.storage_upload_timeout) as client:
+                        response = await client.put(
+                            url,
+                            content=file_content,
+                            headers={
+                                "X-Auth-Token": token,
+                                "Content-Type": content_type,
+                            },
                         )
-                        raise Exception("File upload failed")
+                        if response.status_code not in (200, 201):
+                            raise Exception(f"File upload failed: HTTP {response.status_code}")
+                        return response
+            
+            # Circuit Breaker + 재시도 적용
+            await breaker.call(
+                retry_with_backoff,
+                _upload_request,
+                max_retries=self.settings.retry_max_attempts_storage,
+                initial_delay=1.0,
+                retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
+            )
 
-                    # 반환 형식: container/object_name (업로드 성공은 로깅 안 함)
-                    return f"{container}/{object_name}"
+            # 반환 형식: container/object_name (업로드 성공은 로깅 안 함)
+            return f"{container}/{object_name}"
 
-        except httpx.TimeoutException:
-            logger.error("File upload timeout", extra={"event": "storage", "object": object_name})
-            raise Exception("File upload timeout")
-        except httpx.HTTPError as e:
-            logger.error("File upload HTTP error", exc_info=e, extra={"event": "storage", "object": object_name})
-            raise Exception("File upload failed")
         except Exception as e:
-            if "File upload" in str(e):
-                raise
-            logger.error("File upload failed", exc_info=e, extra={"event": "storage", "object": object_name})
-            raise Exception("File upload failed")
+            logger.error(
+                "File upload failed",
+                exc_info=e,
+                extra={"event": "storage", "object": object_name, "error_type": type(e).__name__}
+            )
+            raise
     
     async def download_file(self, object_name: str) -> bytes:
         """
@@ -398,13 +419,27 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    # GET 메서드로 오브젝트 다운로드
-                    response = await client.get(
-                        url,
-                        headers={"X-Auth-Token": token},
-                    )
+            # Circuit Breaker와 재시도 로직 적용
+            breaker = get_storage_circuit_breaker()
+            
+            async def _download_request():
+                async with record_external_request("nhn_storage"):
+                    async with httpx.AsyncClient(timeout=self.settings.storage_download_timeout) as client:
+                        response = await client.get(
+                            url,
+                            headers={"X-Auth-Token": token},
+                        )
+                        response.raise_for_status()
+                        return response
+            
+            # Circuit Breaker + 재시도 적용
+            response = await breaker.call(
+                retry_with_backoff,
+                _download_request,
+                max_retries=self.settings.retry_max_attempts_storage,
+                initial_delay=1.0,
+                retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
+            )
 
                     if response.status_code != 200:
                         logger.error(
