@@ -1,8 +1,7 @@
 """
-Request tracking middleware for graceful shutdown.
+진행 중인 요청 추적 미들웨어.
 
-진행 중인 요청을 추적하여 Graceful shutdown 시 정확한 요청 완료 대기를 보장합니다.
-Autoscaling 환경에서 인스턴스 종료 시 안전한 종료를 위해 필수입니다.
+Graceful shutdown 시 진행 중인 요청을 추적하여 안전하게 종료할 수 있게 합니다.
 """
 import asyncio
 import logging
@@ -10,54 +9,94 @@ from typing import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
 
-from app.main import increment_in_flight_requests, decrement_in_flight_requests, get_in_flight_requests
-from app.utils.prometheus_metrics import in_flight_requests_metric
+from app.utils.prometheus_metrics import in_flight_requests
 
-logger = logging.getLogger("app.middleware.request_tracking")
+logger = logging.getLogger("app.request_tracking")
+
+# Health check 경로는 제외 (shutdown 시에도 체크 가능해야 함)
+EXCLUDED_PATHS = {"/health", "/health/liveness", "/health/readiness", "/health/detailed"}
 
 
 class RequestTrackingMiddleware(BaseHTTPMiddleware):
     """
     진행 중인 요청을 추적하는 미들웨어.
     
-    Graceful shutdown 시:
-    1. 요청 시작 시 카운터 증가
-    2. 요청 완료 시 카운터 감소
-    3. shutdown 시 카운터가 0이 될 때까지 대기
+    Graceful shutdown 시 진행 중인 요청을 완료할 때까지 대기할 수 있게 합니다.
     """
     
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app):
         super().__init__(app)
+        self._lock = asyncio.Lock()
+        self._request_count = 0
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """요청을 추적하고 처리."""
+        """
+        요청 처리 및 추적.
+        
+        Args:
+            request: FastAPI Request 객체
+            call_next: 다음 미들웨어 또는 엔드포인트
+            
+        Returns:
+            Response: 처리된 응답
+        """
         # Health check는 제외 (shutdown 시에도 체크 가능해야 함)
-        if request.url.path in ["/health", "/health/liveness", "/health/readiness", "/metrics"]:
+        if request.url.path in EXCLUDED_PATHS:
             return await call_next(request)
         
         # 요청 시작: 카운터 증가
-        count = await increment_in_flight_requests()
-        in_flight_requests_metric.set(count)
+        async with self._lock:
+            self._request_count += 1
+            in_flight_requests.set(self._request_count)
         
         try:
             # 요청 처리
             response = await call_next(request)
             return response
-        except Exception as e:
-            # 예외 발생 시에도 카운터 감소
-            logger.error(
-                "Request failed",
-                extra={
-                    "event": "request_tracking",
-                    "path": request.url.path,
-                    "method": request.method,
-                    "error_type": type(e).__name__,
-                }
-            )
-            raise
         finally:
             # 요청 완료: 카운터 감소
-            count = await decrement_in_flight_requests()
-            in_flight_requests_metric.set(count)
+            async with self._lock:
+                self._request_count -= 1
+                if self._request_count < 0:
+                    self._request_count = 0  # 안전장치
+                in_flight_requests.set(self._request_count)
+    
+    async def wait_for_requests(self, timeout: float = 30.0) -> bool:
+        """
+        진행 중인 요청이 완료될 때까지 대기.
+        
+        Args:
+            timeout: 최대 대기 시간 (초)
+            
+        Returns:
+            True: 모든 요청 완료, False: 타임아웃
+        """
+        import time
+        
+        start_time = time.time()
+        
+        while True:
+            async with self._lock:
+                count = self._request_count
+            
+            if count == 0:
+                logger.info(
+                    "All in-flight requests completed",
+                    extra={"event": "shutdown"},
+                )
+                return True
+            
+            if time.time() - start_time >= timeout:
+                logger.warning(
+                    f"Timeout waiting for requests (remaining: {count})",
+                    extra={
+                        "event": "shutdown",
+                        "remaining_requests": count,
+                        "timeout": timeout,
+                    },
+                )
+                return False
+            
+            # 짧은 간격으로 재확인
+            await asyncio.sleep(0.5)

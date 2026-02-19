@@ -33,3 +33,6 @@ boto3==1.34.14
 # Observability: Prometheus (Loki 로그는 Promtail이 파일 수집)
 prometheus-client==0.20.0
 prometheus-fastapi-instrumentator==7.0.0
+
+# Rate Limiting
+slowapi==0.1.9

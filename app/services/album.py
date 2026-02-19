@@ -344,7 +344,7 @@ class AlbumService:
         await self.db.flush()
         await self.db.refresh(share_link)
         # 공유링크 생성은 INFO (중요 비즈니스 이벤트)
-        logger.info("Share link created", extra={"event": "share", "share_id": share_link.id, "album_id": album.id})
+        logger.info("Share link created", extra={"event": "share_link_create", "share_id": share_link.id, "album_id": album.id})
         return share_link
     
     async def get_share_link_by_token(
@@ -468,7 +468,7 @@ class AlbumService:
         """
         if not share_link.is_valid:
             # 만료/비활성 링크 접근 시도 → WARNING
-            logger.warning("Share access denied", extra={"event": "share", "share_id": share_link.id})
+            logger.warning("Share access denied", extra={"event": "share_access", "share_id": share_link.id})
             return None
         
         # Get album

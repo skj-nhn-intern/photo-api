@@ -47,3 +47,5 @@ deploy-package/
 # Temporary files
 tmp/
 temp/
+
+deploy/apply-env-and-restart.sh

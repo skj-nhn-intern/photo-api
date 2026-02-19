@@ -36,11 +36,25 @@ scrape_configs:
             timestamp: timestamp
             instance_ip: instance_ip
             host: host
+            event: event
+            level: level
+            http_path: http_path
       - template:
           source: instance_ip
           template: '{{ or .instance_ip .host }}'
       - labels:
           instance_ip: instance_ip
+      # 서비스 모니터링용 라벨: event(이벤트별 건수), level(ERROR/WARNING 비율), path_prefix(서비스별 필터)
+      - labels:
+          event: event
+      - labels:
+          level: level
+      # http_path에서 서비스 구간 추출 → path_prefix 라벨 (/auth, /albums, /photos, /share)
+      - regex:
+          source: http_path
+          expression: '^(?P<path_prefix>/auth|/albums|/photos|/share)'
+      - labels:
+          path_prefix: path_prefix
       - timestamp:
           source: timestamp
           format: "2006-01-02T15:04:05.000Z07:00"
@@ -61,11 +75,23 @@ scrape_configs:
             timestamp: timestamp
             instance_ip: instance_ip
             host: host
+            event: event
+            level: level
+            http_path: http_path
       - template:
           source: instance_ip
           template: '{{ or .instance_ip .host }}'
       - labels:
           instance_ip: instance_ip
+      - labels:
+          event: event
+      - labels:
+          level: level
+      - regex:
+          source: http_path
+          expression: '^(?P<path_prefix>/auth|/albums|/photos|/share)'
+      - labels:
+          path_prefix: path_prefix
       - timestamp:
           source: timestamp
           format: "2006-01-02T15:04:05.000Z07:00"

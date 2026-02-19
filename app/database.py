@@ -23,13 +23,22 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import get_settings
-from app.utils.prometheus_metrics import (
-    db_errors_total,
-    db_pool_active_connections,
-    db_pool_waiting_requests,
-)
+from app.utils.prometheus_metrics import db_errors_total, REGISTRY, Gauge
 
 _logger = logging.getLogger("app.db")
+
+# DB 연결 풀 모니터링 메트릭
+db_pool_active_connections = Gauge(
+    "photo_api_db_pool_active_connections",
+    "Number of active database connections in pool",
+    registry=REGISTRY,
+)
+
+db_pool_waiting_requests = Gauge(
+    "photo_api_db_pool_waiting_requests",
+    "Number of requests waiting for database connection",
+    registry=REGISTRY,
+)
 
 settings = get_settings()
 
@@ -53,50 +62,12 @@ else:
         _database_url,
         echo=False,  # SQL 로그 비활성화
         poolclass=QueuePool,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
-        pool_timeout=settings.db_pool_timeout,
-        pool_recycle=settings.db_pool_recycle,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
         pool_pre_ping=True,
     )
-
-
-# DB 연결 풀 모니터링을 위한 이벤트 리스너
-def _update_pool_metrics():
-    """연결 풀 메트릭 업데이트."""
-    if "sqlite" in _database_url:
-        # SQLite는 연결 풀 없음
-        db_pool_active_connections.set(0)
-        db_pool_waiting_requests.set(0)
-        return
-    
-    try:
-        pool = engine.pool
-        # 활성 연결 수 (체크아웃된 연결)
-        # checkedout()은 현재 사용 중인 연결 수를 반환
-        active = pool.checkedout() if hasattr(pool, 'checkedout') else 0
-        db_pool_active_connections.set(active)
-        
-        # 대기 중인 요청 수는 직접 측정 어려움
-        # pool.overflow()는 사용 가능한 연결이 없을 때 생성된 추가 연결 수
-        # 실제 대기 중인 요청은 pool 내부 상태로만 알 수 있음
-        # 간단히 0으로 설정 (향후 개선 가능)
-        db_pool_waiting_requests.set(0)
-    except Exception as e:
-        # 메트릭 업데이트 실패는 무시 (로깅만)
-        _logger.debug(f"Failed to update pool metrics: {e}")
-
-
-@event.listens_for(engine.sync_engine, "checkout")
-def _on_checkout(dbapi_conn, connection_record, connection_proxy):
-    """연결 체크아웃 시 메트릭 업데이트."""
-    _update_pool_metrics()
-
-
-@event.listens_for(engine.sync_engine, "checkin")
-def _on_checkin(dbapi_conn, connection_record):
-    """연결 체크인 시 메트릭 업데이트."""
-    _update_pool_metrics()
 
 
 # 느린 쿼리 로깅
@@ -117,6 +88,34 @@ def _after_cursor_execute(conn, cursor, statement, parameters, context, executem
                 "Slow query",
                 extra={"event": "db", "ms": round(elapsed * 1000), "query": short_stmt},
             )
+
+
+# DB 연결 풀 모니터링 (PostgreSQL/MySQL만, SQLite는 제외)
+if "sqlite" not in _database_url and hasattr(engine.sync_engine, "pool"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def _on_connect(dbapi_conn, connection_record):
+        """연결 체크아웃 시 호출."""
+        pool = engine.sync_engine.pool
+        if hasattr(pool, "size"):
+            db_pool_active_connections.set(pool.size())
+    
+    @event.listens_for(engine.sync_engine, "checkout")
+    def _on_checkout(dbapi_conn, connection_record, connection_proxy):
+        """연결 체크아웃 시 호출."""
+        pool = engine.sync_engine.pool
+        if hasattr(pool, "size"):
+            db_pool_active_connections.set(pool.size())
+        if hasattr(pool, "overflow"):
+            db_pool_waiting_requests.set(pool.overflow())
+    
+    @event.listens_for(engine.sync_engine, "checkin")
+    def _on_checkin(dbapi_conn, connection_record):
+        """연결 체크인 시 호출."""
+        pool = engine.sync_engine.pool
+        if hasattr(pool, "size"):
+            db_pool_active_connections.set(pool.size())
+        if hasattr(pool, "overflow"):
+            db_pool_waiting_requests.set(pool.overflow())
 
 
 # Create async session factory

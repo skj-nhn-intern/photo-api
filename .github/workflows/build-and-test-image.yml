@@ -65,6 +65,13 @@ jobs:
           echo "public_key_path=$HOME/.ssh/nhn_temp_key.pub" >> $GITHUB_OUTPUT
           chmod 600 ~/.ssh/nhn_temp_key
 
+      - name: Cache offline packages
+        id: cache_offline
+        uses: actions/cache@v4
+        with:
+          path: offline-packages
+          key: ${{ runner.os }}-offline-${{ hashFiles('requirements.txt') }}-${{ env.PROMTAIL_VERSION }}-${{ env.NODE_EXPORTER_VERSION }}
+
       - name: Create build instance on NHN Cloud
         id: create_instance
         env:
@@ -82,7 +89,7 @@ jobs:
       - name: Wait for SSH to be ready
         run: |
           echo "⏳ SSH 서비스 준비 대기 중..."
-          max_attempts=30
+          max_attempts=60
           attempt=0
           
           while [ $attempt -lt $max_attempts ]; do
@@ -96,7 +103,7 @@ jobs:
             
             attempt=$((attempt + 1))
             echo "  시도 $attempt/$max_attempts..."
-            sleep 10
+            sleep 5
           done
           
           if [ $attempt -eq $max_attempts ]; then
@@ -153,18 +160,16 @@ jobs:
           echo "✅ 소스 코드 업로드 완료"
 
       - name: Download dependencies offline
+        if: steps.cache_offline.outputs.cache-hit != 'true'
         run: |
           echo "📥 오프라인 의존성 패키지 다운로드 중..."
           
-          # Python 패키지 다운로드
           mkdir -p offline-packages
           pip download -r requirements.txt -d offline-packages/
           
-          # Promtail 바이너리 다운로드
           echo "📥 Promtail 바이너리 다운로드 중..."
           curl -sSL -o offline-packages/promtail.zip \
             "https://github.com/grafana/loki/releases/download/v${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
-          # node_exporter (인스턴스 리소스 메트릭)
           echo "📥 node_exporter 다운로드 중..."
           curl -sSL -o offline-packages/node_exporter.tar.gz \
             "https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
@@ -281,36 +286,23 @@ jobs:
           SSH_OPTS="-o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}"
           
           echo "🔄 서비스 시작 중..."
-          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl start photo-api.service && sleep 8"
+          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl start photo-api.service && sleep 5"
           
-          echo "📋 서비스 상태 및 로그 (원인 파악용)"
-          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} << 'DIAG'
-            echo "=== photo-api.service status ==="
-            sudo systemctl status photo-api.service --no-pager || true
-            echo "=== journalctl -u photo-api -n 60 ==="
-            sudo journalctl -u photo-api -n 60 --no-pager || true
-            echo "=== 로컬에서 8000 포트 확인 ==="
-            curl -s -o /dev/null -w "localhost:8000/health → HTTP %{http_code}\n" http://127.0.0.1:8000/health || echo "localhost 연결 실패"
-          DIAG
-          
-          echo "🔍 빌드 인스턴스 API 헬스체크 (Floating IP:8000)..."
-          max_attempts=30
+          echo "🔍 빌드 인스턴스 API 헬스체크 (Floating IP:8000, 리다이렉트 따라감)..."
+          max_attempts=36
           attempt=0
-          
           while [ $attempt -lt $max_attempts ]; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${INSTANCE_IP}:8000/health" || echo "000")
+            code=$(curl -sL -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${INSTANCE_IP}:8000/health/" || echo "000")
             if [ "$code" = "200" ]; then
-              echo "✅ API 정상 응답 (HTTP $code) — 이미지 생성 진행"
+              echo "✅ API 정상 (HTTP $code) — 이미지 생성 진행"
               exit 0
             fi
             attempt=$((attempt + 1))
-            echo "  시도 $attempt/$max_attempts: HTTP $code, 대기 중..."
-            sleep 10
+            [ $((attempt % 6)) -eq 0 ] && echo "  시도 $attempt/$max_attempts: HTTP $code"
+            sleep 5
           done
-          
-          echo "❌ 이미지 생성 중단: http://${INSTANCE_IP}:8000/health 가 정상(200)이 아닙니다."
-          echo "📋 실패 시점 서비스 로그:"
-          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl status photo-api.service --no-pager || true; sudo journalctl -u photo-api -n 80 --no-pager || true"
+          echo "❌ 이미지 생성 중단: /health/ 응답이 200이 아님 (마지막: HTTP $code)"
+          ssh $SSH_OPTS ubuntu@${INSTANCE_IP} "sudo systemctl status photo-api.service --no-pager; sudo journalctl -u photo-api -n 40 --no-pager"
           exit 1
 
       - name: Prepare image for first-boot SSH (cloud-init clean)
@@ -351,8 +343,13 @@ jobs:
 
       - name: Wait for test instance services
         run: |
-          echo "⏳ 서비스 시작 대기 중..."
-          sleep 60  # systemd 서비스가 부팅 시 자동 시작되도록 대기
+          TEST_IP="${{ steps.test_instance.outputs.test_instance_ip }}"
+          for i in $(seq 1 24); do
+            code=$(curl -sL -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://${TEST_IP}:8000/health/" || echo "000")
+            [ "$code" = "200" ] && echo "✅ 테스트 인스턴스 준비 (${i}회)" && exit 0
+            sleep 5
+          done
+          echo "::warning::2분 내 헬스체크 미응답. 다음 단계에서 재시도합니다."
 
       - name: Check server time sync (Temp URL 검증용)
         run: |
@@ -376,53 +373,23 @@ jobs:
 
       - name: Test image with curl (KR1만)
         run: |
-          echo "🧪 이미지 테스트 중 (KR1, 실제 실행 테스트만)..."
-          
-          max_attempts=30
-          attempt=0
-          
-          while [ $attempt -lt $max_attempts ]; do
-            echo "  시도 $((attempt + 1))/$max_attempts: Health check..."
-            
-            if curl -f -s -o /dev/null -w "%{http_code}" \
-                http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/health | grep -q 200; then
-              echo "✅ Health check 성공"
-              
-              # API 정보 확인
-              echo "📊 API 정보:"
-              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/ | jq .
-              
-              # Metrics 확인 (앱 /metrics, node_exporter 인스턴스 리소스)
-              echo "📈 앱 메트릭 (8000):"
-              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:8000/metrics | head -15
-              echo "📈 node_exporter 메트릭 (9100):"
-              curl -s http://${{ steps.test_instance.outputs.test_instance_ip }}:9100/metrics | head -10
-              
-              echo "✅ 모든 테스트 통과"
+          TEST_IP="${{ steps.test_instance.outputs.test_instance_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i ${{ steps.ssh_key.outputs.private_key_path }}"
+          echo "🧪 이미지 테스트 (health → / → metrics)..."
+          for i in $(seq 1 36); do
+            code=$(curl -sL -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${TEST_IP}:8000/health/" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "✅ Health $code"
+              curl -s "http://${TEST_IP}:8000/" | jq -c . 2>/dev/null || true
+              curl -s "http://${TEST_IP}:8000/metrics" | head -5
+              echo "✅ 테스트 통과"
               exit 0
             fi
-            
-            attempt=$((attempt + 1))
-            sleep 10
+            [ $((i % 6)) -eq 0 ] && echo "  시도 $i/36: HTTP $code"
+            sleep 5
           done
-          
           echo "❌ Health check 실패"
-          
-          # 디버깅 정보 수집
-          echo "🔍 디버깅 정보 수집 중..."
-          ssh -o StrictHostKeyChecking=no \
-            -i ${{ steps.ssh_key.outputs.private_key_path }} \
-            ubuntu@${{ steps.test_instance.outputs.test_instance_ip }} << 'DEBUG'
-          echo "=== systemd 서비스 상태 ==="
-          sudo systemctl status photo-api.service --no-pager || true
-          echo "=== photo-api 로그 ==="
-          sudo journalctl -u photo-api.service -n 50 --no-pager || true
-          echo "=== 프로세스 확인 ==="
-          ps aux | grep -E 'uvicorn|python' || true
-          echo "=== 포트 확인 ==="
-          sudo netstat -tlnp | grep 8000 || true
-          DEBUG
-          
+          ssh $SSH_OPTS ubuntu@${TEST_IP} "sudo systemctl status photo-api.service --no-pager; sudo journalctl -u photo-api -n 30 --no-pager"
           exit 1
 
       # KR2 이미지 업로드 비활성화 (필요시 활성화)

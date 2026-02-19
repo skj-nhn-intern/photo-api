@@ -1,14 +1,10 @@
 """
-Circuit Breaker pattern implementation for external service calls.
+Circuit Breaker 패턴 구현.
 
-Circuit Breaker는 외부 서비스 장애 시 빠른 실패(fail-fast)를 통해
-리소스 낭비를 방지하고 장애 전파를 막습니다.
+외부 서비스 호출 시 장애 전파를 방지하고 빠른 실패(fail-fast)를 제공합니다.
+상태 전이: CLOSED → OPEN → HALF_OPEN → CLOSED
 
-상태 전이:
-- CLOSED → OPEN: 실패율이 threshold 초과
-- OPEN → HALF_OPEN: timeout 후 (테스트 모드)
-- HALF_OPEN → CLOSED: 성공
-- HALF_OPEN → OPEN: 실패
+참고: https://martinfowler.com/bliki/CircuitBreaker.html
 """
 import asyncio
 import logging
@@ -16,69 +12,59 @@ import time
 from enum import Enum
 from typing import Callable, TypeVar, Optional
 
-from app.utils.prometheus_metrics import circuit_breaker_state
+from app.utils.prometheus_metrics import REGISTRY, Gauge
 
 logger = logging.getLogger("app.circuit_breaker")
 
-T = TypeVar('T')
+# Circuit Breaker 상태 메트릭
+circuit_breaker_state = Gauge(
+    "photo_api_circuit_breaker_state",
+    "Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
+    ["service"],
+    registry=REGISTRY,
+)
+
+T = TypeVar("T")
 
 
-class CircuitState(Enum):
-    """Circuit breaker 상태."""
-    CLOSED = "closed"  # 정상 동작
-    OPEN = "open"      # 차단 (실패율 높음)
-    HALF_OPEN = "half_open"  # 테스트 중
+class CircuitState(str, Enum):
+    """Circuit Breaker 상태."""
+    CLOSED = "CLOSED"  # 정상 동작, 요청 허용
+    OPEN = "OPEN"  # 장애 상태, 요청 차단
+    HALF_OPEN = "HALF_OPEN"  # 복구 시도 중, 제한적 요청 허용
 
 
 class CircuitBreaker:
     """
-    Circuit breaker pattern implementation.
+    Circuit Breaker 구현.
     
-    외부 서비스 장애 시:
-    1. 실패가 누적되면 OPEN 상태로 전이 (요청 차단)
-    2. 일정 시간 후 HALF_OPEN으로 전이 (테스트)
-    3. 테스트 성공 시 CLOSED로 복구
-    
-    Args:
-        failure_threshold: OPEN 전이를 위한 실패 횟수 (default: 5)
-        success_threshold: HALF_OPEN → CLOSED 전이를 위한 성공 횟수 (default: 2)
-        timeout: OPEN → HALF_OPEN 전이 대기 시간 (초, default: 60.0)
-        expected_exception: 재시도할 예외 타입 (default: Exception)
-        service_name: 서비스 이름 (메트릭용)
-    
-    Example:
-        ```python
-        storage_breaker = CircuitBreaker(
-            failure_threshold=5,
-            timeout=60.0,
-            service_name="nhn_storage"
-        )
+    사용 예시:
+        breaker = CircuitBreaker("nhn_storage", failure_threshold=5, timeout=60)
         
-        try:
-            result = await storage_breaker.call(
-                storage_service.upload_file,
-                file_content=data,
-                object_name="path/to/file.jpg"
-            )
-        except Exception as e:
-            # Circuit breaker가 OPEN이거나 함수 실행 실패
-            logger.error(f"Upload failed: {e}")
-        ```
+        async def call_service():
+            return await breaker.call(service_function, *args, **kwargs)
     """
     
     def __init__(
         self,
+        service_name: str,
         failure_threshold: int = 5,
         success_threshold: int = 2,
         timeout: float = 60.0,
-        expected_exception: tuple = (Exception,),
-        service_name: str = "unknown",
     ):
+        """
+        Circuit Breaker 초기화.
+        
+        Args:
+            service_name: 서비스 이름 (메트릭 라벨용)
+            failure_threshold: OPEN 상태로 전이하기 위한 연속 실패 횟수
+            success_threshold: CLOSED 상태로 전이하기 위한 HALF_OPEN에서의 성공 횟수
+            timeout: OPEN 상태에서 HALF_OPEN으로 전이하기까지의 시간 (초)
+        """
+        self.service_name = service_name
         self.failure_threshold = failure_threshold
         self.success_threshold = success_threshold
         self.timeout = timeout
-        self.expected_exception = expected_exception
-        self.service_name = service_name
         
         self.state = CircuitState.CLOSED
         self.failure_count = 0
@@ -86,153 +72,123 @@ class CircuitBreaker:
         self.last_failure_time: Optional[float] = None
         self._lock = asyncio.Lock()
         
-        # Prometheus 메트릭 초기화
-        circuit_breaker_state.labels(service=service_name, state="closed").set(1)
+        # 초기 상태 메트릭 설정
+        circuit_breaker_state.labels(service=service_name).set(0)
     
     async def call(self, func: Callable[..., T], *args, **kwargs) -> T:
         """
-        Execute function with circuit breaker protection.
+        Circuit Breaker를 통해 함수를 호출.
         
         Args:
-            func: Async function to execute
-            *args, **kwargs: Arguments to pass to func
-        
+            func: 호출할 함수 (async 또는 sync)
+            *args, **kwargs: 함수 인자
+            
         Returns:
-            Result of func
-        
+            함수 반환값
+            
         Raises:
-            Exception: Circuit breaker is OPEN or function execution failed
+            CircuitBreakerOpenError: Circuit Breaker가 OPEN 상태일 때
+            원본 함수의 예외: 함수 실행 중 발생한 예외
         """
         async with self._lock:
-            # 상태 확인
+            # 상태 확인 및 전이
+            await self._check_and_transition()
+            
+            # OPEN 상태면 즉시 실패
             if self.state == CircuitState.OPEN:
-                if self.last_failure_time and time.time() - self.last_failure_time >= self.timeout:
-                    # Timeout 지나면 HALF_OPEN으로 전이
-                    self.state = CircuitState.HALF_OPEN
-                    self.success_count = 0
-                    self.failure_count = 0
-                    self._update_metrics("half_open")
-                    logger.info(
-                        f"Circuit breaker [{self.service_name}]: OPEN → HALF_OPEN",
-                        extra={"event": "circuit_breaker", "service": self.service_name}
-                    )
-                else:
-                    # 아직 차단 상태
-                    raise Exception(f"Circuit breaker [{self.service_name}] is OPEN")
+                logger.warning(
+                    f"Circuit breaker OPEN for {self.service_name}, request rejected",
+                    extra={"event": "circuit_breaker", "service": self.service_name},
+                )
+                raise CircuitBreakerOpenError(
+                    f"Circuit breaker is OPEN for {self.service_name}"
+                )
         
+        # HALF_OPEN 또는 CLOSED 상태에서 요청 실행
         try:
-            # 함수 실행
-            result = await func(*args, **kwargs)
+            # async 함수인지 확인
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
             
             # 성공 처리
             async with self._lock:
-                if self.state == CircuitState.HALF_OPEN:
-                    self.success_count += 1
-                    if self.success_count >= self.success_threshold:
-                        self.state = CircuitState.CLOSED
-                        self.failure_count = 0
-                        self._update_metrics("closed")
-                        logger.info(
-                            f"Circuit breaker [{self.service_name}]: HALF_OPEN → CLOSED",
-                            extra={"event": "circuit_breaker", "service": self.service_name}
-                        )
-                elif self.state == CircuitState.CLOSED:
-                    self.failure_count = 0  # 성공 시 카운터 리셋
+                await self._on_success()
             
             return result
             
-        except self.expected_exception as e:
+        except Exception as e:
             # 실패 처리
             async with self._lock:
-                self.failure_count += 1
-                self.last_failure_time = time.time()
-                
-                if self.state == CircuitState.HALF_OPEN:
-                    # HALF_OPEN에서 실패 → OPEN
-                    self.state = CircuitState.OPEN
-                    self._update_metrics("open")
-                    logger.warning(
-                        f"Circuit breaker [{self.service_name}]: HALF_OPEN → OPEN",
-                        extra={
-                            "event": "circuit_breaker",
-                            "service": self.service_name,
-                            "error_type": type(e).__name__,
-                        }
-                    )
-                elif self.state == CircuitState.CLOSED:
-                    if self.failure_count >= self.failure_threshold:
-                        # CLOSED에서 실패율 초과 → OPEN
-                        self.state = CircuitState.OPEN
-                        self._update_metrics("open")
-                        logger.warning(
-                            f"Circuit breaker [{self.service_name}]: CLOSED → OPEN (failures: {self.failure_count})",
-                            extra={
-                                "event": "circuit_breaker",
-                                "service": self.service_name,
-                                "failure_count": self.failure_count,
-                            }
-                        )
-            
+                await self._on_failure()
             raise
     
-    def _update_metrics(self, state: str):
-        """Update Prometheus metrics for circuit breaker state."""
-        # 모든 상태를 0으로 리셋
-        circuit_breaker_state.labels(service=self.service_name, state="closed").set(0)
-        circuit_breaker_state.labels(service=self.service_name, state="open").set(0)
-        circuit_breaker_state.labels(service=self.service_name, state="half_open").set(0)
-        
-        # 현재 상태를 1로 설정
-        circuit_breaker_state.labels(service=self.service_name, state=state).set(1)
+    async def _check_and_transition(self) -> None:
+        """상태 확인 및 자동 전이."""
+        if self.state == CircuitState.OPEN:
+            # 타임아웃 확인
+            if (
+                self.last_failure_time
+                and time.time() - self.last_failure_time >= self.timeout
+            ):
+                # HALF_OPEN으로 전이
+                self.state = CircuitState.HALF_OPEN
+                self.success_count = 0
+                self.failure_count = 0
+                circuit_breaker_state.labels(service=self.service_name).set(2)
+                logger.info(
+                    f"Circuit breaker transitioning to HALF_OPEN for {self.service_name}",
+                    extra={"event": "circuit_breaker", "service": self.service_name},
+                )
     
-    def get_state(self) -> CircuitState:
-        """Get current circuit breaker state."""
-        return self.state
-    
-    def reset(self):
-        """Reset circuit breaker to CLOSED state (for testing)."""
-        async def _reset():
-            async with self._lock:
+    async def _on_success(self) -> None:
+        """성공 처리."""
+        if self.state == CircuitState.HALF_OPEN:
+            self.success_count += 1
+            if self.success_count >= self.success_threshold:
+                # CLOSED로 전이
                 self.state = CircuitState.CLOSED
                 self.failure_count = 0
                 self.success_count = 0
-                self.last_failure_time = None
-                self._update_metrics("closed")
+                circuit_breaker_state.labels(service=self.service_name).set(0)
+                logger.info(
+                    f"Circuit breaker CLOSED for {self.service_name}",
+                    extra={"event": "circuit_breaker", "service": self.service_name},
+                )
+        elif self.state == CircuitState.CLOSED:
+            # CLOSED 상태에서는 실패 카운트 리셋
+            self.failure_count = 0
+    
+    async def _on_failure(self) -> None:
+        """실패 처리."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
         
-        # 비동기 함수이므로 실행 필요
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(_reset())
-        else:
-            loop.run_until_complete(_reset())
+        if self.state == CircuitState.HALF_OPEN:
+            # HALF_OPEN에서 실패하면 즉시 OPEN으로
+            self.state = CircuitState.OPEN
+            circuit_breaker_state.labels(service=self.service_name).set(1)
+            logger.warning(
+                f"Circuit breaker OPEN for {self.service_name} (failed in HALF_OPEN)",
+                extra={"event": "circuit_breaker", "service": self.service_name},
+            )
+        elif self.state == CircuitState.CLOSED:
+            # CLOSED에서 실패 횟수 확인
+            if self.failure_count >= self.failure_threshold:
+                self.state = CircuitState.OPEN
+                circuit_breaker_state.labels(service=self.service_name).set(1)
+                logger.warning(
+                    f"Circuit breaker OPEN for {self.service_name} "
+                    f"(failure_count={self.failure_count})",
+                    extra={
+                        "event": "circuit_breaker",
+                        "service": self.service_name,
+                        "failure_count": self.failure_count,
+                    },
+                )
 
 
-# 서비스별 Circuit Breaker 인스턴스
-_storage_breaker: Optional[CircuitBreaker] = None
-_cdn_breaker: Optional[CircuitBreaker] = None
-
-
-def get_storage_circuit_breaker() -> CircuitBreaker:
-    """Get circuit breaker for Object Storage service."""
-    global _storage_breaker
-    if _storage_breaker is None:
-        _storage_breaker = CircuitBreaker(
-            failure_threshold=5,
-            success_threshold=2,
-            timeout=60.0,
-            service_name="nhn_storage",
-        )
-    return _storage_breaker
-
-
-def get_cdn_circuit_breaker() -> CircuitBreaker:
-    """Get circuit breaker for CDN service."""
-    global _cdn_breaker
-    if _cdn_breaker is None:
-        _cdn_breaker = CircuitBreaker(
-            failure_threshold=5,
-            success_threshold=2,
-            timeout=60.0,
-            service_name="nhn_cdn",
-        )
-    return _cdn_breaker
+class CircuitBreakerOpenError(Exception):
+    """Circuit Breaker가 OPEN 상태일 때 발생하는 예외."""
+    pass

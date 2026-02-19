@@ -22,8 +22,6 @@ from botocore.exceptions import ClientError
 from app.config import get_settings
 from app.utils.prometheus_metrics import record_external_request
 from app.utils.logger import log_error, log_warning
-from app.utils.retry import retry_with_backoff, DEFAULT_RETRYABLE_EXCEPTIONS
-from app.utils.circuit_breaker import get_storage_circuit_breaker
 
 logger = logging.getLogger("app.storage")
 
@@ -109,28 +107,13 @@ class NHNObjectStorageService:
             }
             
             try:
-                # Circuit Breaker와 재시도 로직 적용
-                breaker = get_storage_circuit_breaker()
-                
-                async def _auth_request():
-                    async with record_external_request("nhn_storage"):
-                        async with httpx.AsyncClient(timeout=self.settings.storage_auth_timeout) as client:
-                            response = await client.post(
-                                auth_url,
-                                json=auth_data,
-                                headers={"Content-Type": "application/json"},
-                            )
-                            response.raise_for_status()
-                            return response
-                
-                # Circuit Breaker + 재시도 적용
-                response = await breaker.call(
-                    retry_with_backoff,
-                    _auth_request,
-                    max_retries=self.settings.retry_max_attempts_storage,
-                    initial_delay=1.0,
-                    retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
-                )
+                async with record_external_request("nhn_storage"):
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            auth_url,
+                            json=auth_data,
+                            headers={"Content-Type": "application/json"},
+                        )
                     
                     # 응답 상태 코드 확인
                     status_code = response.status_code
@@ -145,7 +128,7 @@ class NHNObjectStorageService:
                             error_code="STORAGE_001",
                             upstream_service="nhn_storage_iam",
                             http_status=status_code,
-                            event="storage",
+                            event="storage_auth",
                             exc_info=True,
                         )
                         raise Exception("IAM 인증 응답을 파싱할 수 없습니다.")
@@ -174,7 +157,7 @@ class NHNObjectStorageService:
                             error_code=error_code,
                             upstream_service="nhn_storage_iam",
                             http_status=status_code,
-                            event="storage",
+                            event="storage_auth",
                             exc_info=False,
                         )
                         raise Exception(error_message)
@@ -192,7 +175,7 @@ class NHNObjectStorageService:
                             error_type="TokenError",
                             error_code="STORAGE_003",
                             upstream_service="nhn_storage_iam",
-                            event="storage",
+                            event="storage_auth",
                             exc_info=False,
                         )
                         raise Exception("IAM 토큰을 받을 수 없습니다.")
@@ -223,7 +206,7 @@ class NHNObjectStorageService:
                             error_type="TenantError",
                             error_code="STORAGE_004",
                             upstream_service="nhn_storage_iam",
-                            event="storage",
+                            event="storage_auth",
                             exc_info=False,
                         )
                         raise Exception("Tenant ID를 찾을 수 없습니다. NHN_STORAGE_TENANT_ID를 설정하세요.")
@@ -240,7 +223,7 @@ class NHNObjectStorageService:
                     error_code="STORAGE_005",
                     upstream_service="nhn_storage_iam",
                     http_status=e.response.status_code if hasattr(e, 'response') else None,
-                    event="storage",
+                    event="storage_auth",
                     exc_info=True,
                 )
                 raise Exception("IAM 인증에 실패했습니다.")
@@ -250,7 +233,7 @@ class NHNObjectStorageService:
                     error_type="NetworkError",
                     error_code="STORAGE_006",
                     upstream_service="nhn_storage_iam",
-                    event="storage",
+                    event="storage_auth",
                     exc_info=True,
                 )
                 raise Exception("IAM 인증 중 네트워크 오류가 발생했습니다.")
@@ -264,7 +247,7 @@ class NHNObjectStorageService:
                     error_message=error_msg,
                     error_code="STORAGE_007",
                     upstream_service="nhn_storage_iam",
-                    event="storage",
+                    event="storage_auth",
                     exc_info=True,
                 )
                 raise Exception(f"Storage authentication failed: {error_msg}")
@@ -312,16 +295,16 @@ class NHNObjectStorageService:
                         if create_response.status_code not in (201, 202):
                             logger.error(
                                 "Container create failed",
-                                extra={"event": "storage", "container": container_name, "status": create_response.status_code},
+                                extra={"event": "storage_container_create", "container": container_name, "status": create_response.status_code},
                             )
                     elif response.status_code not in (200, 204):
                         logger.error(
                             "Container check failed",
-                            extra={"event": "storage", "container": container_name, "status": response.status_code},
+                            extra={"event": "storage_container_check", "container": container_name, "status": response.status_code},
                         )
 
         except Exception as e:
-            logger.error("Container ensure failed", exc_info=e, extra={"event": "storage", "container": container_name})
+            logger.error("Container ensure failed", exc_info=e, extra={"event": "storage_container_ensure", "container": container_name})
     
     async def upload_file(
         self,
@@ -354,43 +337,39 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            # Circuit Breaker와 재시도 로직 적용
-            breaker = get_storage_circuit_breaker()
-            
-            async def _upload_request():
-                async with record_external_request("nhn_storage"):
-                    async with httpx.AsyncClient(timeout=self.settings.storage_upload_timeout) as client:
-                        response = await client.put(
-                            url,
-                            content=file_content,
-                            headers={
-                                "X-Auth-Token": token,
-                                "Content-Type": content_type,
-                            },
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # PUT 메서드로 오브젝트 업로드
+                    response = await client.put(
+                        url,
+                        content=file_content,
+                        headers={
+                            "X-Auth-Token": token,
+                            "Content-Type": content_type,
+                        },
+                    )
+
+                    if response.status_code not in (200, 201):
+                        logger.error(
+                            "File upload failed",
+                            extra={"event": "storage_upload", "status": response.status_code, "object": object_name},
                         )
-                        if response.status_code not in (200, 201):
-                            raise Exception(f"File upload failed: HTTP {response.status_code}")
-                        return response
-            
-            # Circuit Breaker + 재시도 적용
-            await breaker.call(
-                retry_with_backoff,
-                _upload_request,
-                max_retries=self.settings.retry_max_attempts_storage,
-                initial_delay=1.0,
-                retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
-            )
+                        raise Exception("File upload failed")
 
-            # 반환 형식: container/object_name (업로드 성공은 로깅 안 함)
-            return f"{container}/{object_name}"
+                    # 반환 형식: container/object_name (업로드 성공은 로깅 안 함)
+                    return f"{container}/{object_name}"
 
+        except httpx.TimeoutException:
+            logger.error("File upload timeout", extra={"event": "storage_upload", "object": object_name})
+            raise Exception("File upload timeout")
+        except httpx.HTTPError as e:
+            logger.error("File upload HTTP error", exc_info=e, extra={"event": "storage_upload", "object": object_name})
+            raise Exception("File upload failed")
         except Exception as e:
-            logger.error(
-                "File upload failed",
-                exc_info=e,
-                extra={"event": "storage", "object": object_name, "error_type": type(e).__name__}
-            )
-            raise
+            if "File upload" in str(e):
+                raise
+            logger.error("File upload failed", exc_info=e, extra={"event": "storage_upload", "object": object_name})
+            raise Exception("File upload failed")
     
     async def download_file(self, object_name: str) -> bytes:
         """
@@ -419,46 +398,32 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            # Circuit Breaker와 재시도 로직 적용
-            breaker = get_storage_circuit_breaker()
-            
-            async def _download_request():
-                async with record_external_request("nhn_storage"):
-                    async with httpx.AsyncClient(timeout=self.settings.storage_download_timeout) as client:
-                        response = await client.get(
-                            url,
-                            headers={"X-Auth-Token": token},
-                        )
-                        response.raise_for_status()
-                        return response
-            
-            # Circuit Breaker + 재시도 적용
-            response = await breaker.call(
-                retry_with_backoff,
-                _download_request,
-                max_retries=self.settings.retry_max_attempts_storage,
-                initial_delay=1.0,
-                retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
-            )
+            async with record_external_request("nhn_storage"):
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # GET 메서드로 오브젝트 다운로드
+                    response = await client.get(
+                        url,
+                        headers={"X-Auth-Token": token},
+                    )
 
                     if response.status_code != 200:
                         logger.error(
                             "File download failed",
-                            extra={"event": "storage", "status": response.status_code, "object": object_name},
+                            extra={"event": "storage_download", "status": response.status_code, "object": object_name},
                         )
                         raise Exception(f"File download failed: HTTP {response.status_code}")
                     return response.content
 
         except httpx.TimeoutException:
-            logger.error("File download timeout", extra={"event": "storage", "object": object_name})
+            logger.error("File download timeout", extra={"event": "storage_download", "object": object_name})
             raise Exception("File download timeout")
         except httpx.HTTPError as e:
-            logger.error("File download HTTP error", exc_info=e, extra={"event": "storage", "object": object_name})
+            logger.error("File download HTTP error", exc_info=e, extra={"event": "storage_download", "object": object_name})
             raise Exception(f"File download failed: {str(e)}")
         except Exception as e:
             if "File download" in str(e):
                 raise
-            logger.error("File download failed", exc_info=e, extra={"event": "storage", "object": object_name})
+            logger.error("File download failed", exc_info=e, extra={"event": "storage_download", "object": object_name})
             raise
     
     async def delete_file(self, object_name: str) -> bool:
@@ -497,18 +462,18 @@ class NHNObjectStorageService:
                     if not success:
                         logger.error(
                             "File deletion failed",
-                            extra={"event": "storage", "status": response.status_code, "object": object_name},
+                            extra={"event": "storage_delete", "status": response.status_code, "object": object_name},
                         )
                     return success
 
         except httpx.TimeoutException:
-            logger.error("File deletion timeout", extra={"event": "storage", "object": object_name})
+            logger.error("File deletion timeout", extra={"event": "storage_delete", "object": object_name})
             return False
         except httpx.HTTPError as e:
-            logger.error("File deletion failed", exc_info=e, extra={"event": "storage", "object": object_name})
+            logger.error("File deletion failed", exc_info=e, extra={"event": "storage_delete", "object": object_name})
             return False
         except Exception as e:
-            logger.error("File deletion failed", exc_info=e, extra={"event": "storage", "object": object_name})
+            logger.error("File deletion failed", exc_info=e, extra={"event": "storage_delete", "object": object_name})
             return False
     
     async def file_exists(self, object_name: str) -> bool:
@@ -547,7 +512,7 @@ class NHNObjectStorageService:
                     return response.status_code == 200
 
         except Exception as e:
-            logger.error("File exists check failed", exc_info=e, extra={"event": "storage", "object": object_name})
+            logger.error("File exists check failed", exc_info=e, extra={"event": "storage_exists", "object": object_name})
             return False
     
     def _get_s3_client(self) -> boto3.client:
@@ -655,14 +620,14 @@ class NHNObjectStorageService:
             logger.error(
                 "Presigned POST generation failed",
                 exc_info=e,
-                extra={"event": "storage", "object": object_name}
+                extra={"event": "storage_presigned", "object": object_name}
             )
             raise Exception(f"Failed to generate presigned POST: {str(e)}")
         except Exception as e:
             logger.error(
                 "Presigned POST generation failed",
                 exc_info=e,
-                extra={"event": "storage", "object": object_name}
+                extra={"event": "storage_presigned", "object": object_name}
             )
             raise Exception(f"Failed to generate presigned POST: {str(e)}")
     

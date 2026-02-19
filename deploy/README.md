@@ -105,6 +105,22 @@
   `sudo /opt/photo-api/deploy/apply-env-and-restart.sh`  
   한 줄이면 됩니다.
 
+## Object Storage CORS 설정 (Temp URL 사용 시)
+
+브라우저에서 Temp URL로 직접 업로드할 때 CORS preflight(OPTIONS)가 통과하려면 **컨테이너에 CORS 메타데이터**를 한 번 설정해야 합니다.  
+IAM 사용자/비밀번호로 Identity API를 호출해 토큰을 발급한 뒤 CORS를 설정합니다.
+
+```bash
+export OS_TENANT_ID="your-tenant-id"
+export NHN_STORAGE_IAM_USER="your-iam-user"
+export NHN_STORAGE_IAM_PASSWORD="your-password"
+./deploy/set-object-storage-cors.sh
+```
+
+선택: Temp URL Key를 같은 요청으로 설정 — `NHN_STORAGE_TEMP_URL_KEY` export.  
+선택: CORS 오리진 제한 — `CORS_ORIGIN="https://your-frontend.com"`  
+요구: `curl`, `jq` 또는 `python3`.
+
 ## 참고
 
 - [NHN Cloud Deploy 콘솔 가이드](https://docs.nhncloud.com/ko/Dev%20Tools/Deploy/ko/console-guide/)

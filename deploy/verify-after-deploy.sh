@@ -37,13 +37,13 @@ check_service() {
   return 0
 }
 
-# 2) 헬스 엔드포인트 200 + body에 healthy
+# 2) 헬스 엔드포인트 200 + body에 healthy (경로는 /health/ — trailing slash 필수, 미사용 시 307 리다이렉트)
 check_health() {
-  echo "2. 헬스 체크 ($url_display/health)"
+  echo "2. 헬스 체크 ($url_display/health/)"
   local waited=0
   local code body
   while true; do
-    code=$(curl -s -o /tmp/photo-api-health-$$.json -w "%{http_code}" --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$BASE_URL/health" 2>/dev/null || echo "000")
+    code=$(curl -s -o /tmp/photo-api-health-$$.json -w "%{http_code}" --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$BASE_URL/health/" 2>/dev/null || echo "000")
     body=$(cat /tmp/photo-api-health-$$.json 2>/dev/null || true)
     rm -f /tmp/photo-api-health-$$.json
 
@@ -53,6 +53,9 @@ check_health() {
     fi
     if [[ "$waited" -ge "$MAX_WAIT" ]]; then
       fail "헬스 실패 (HTTP $code, body: ${body:0:80})"
+      if [[ "$code" == "000" ]]; then
+        echo "    연결 불가(Connection refused/타임아웃). 아래 진단 참고." >&2
+      fi
       return 1
     fi
     echo "    대기 중... (${waited}s/${MAX_WAIT}s)"
@@ -109,6 +112,24 @@ main() {
     exit 0
   else
     echo "❌ 배포 검증 실패. 위 항목을 확인하세요."
+    echo ""
+    echo "--- 진단 결과 ---"
+    echo ""
+    echo "[ systemctl status $SERVICE_NAME ]"
+    (systemctl status "$SERVICE_NAME" --no-pager 2>&1 || true)
+    echo ""
+    echo "[ journalctl -u $SERVICE_NAME -n 30 --no-pager ]"
+    (journalctl -u "$SERVICE_NAME" -n 30 --no-pager 2>&1 || true)
+    echo ""
+    if command -v ss &>/dev/null; then
+      echo "[ ss -tlnp | grep 8000 ]"
+      (ss -tlnp 2>/dev/null | grep 8000) || echo "(8000 포트 리스닝 없음)"
+    fi
+    echo ""
+    echo "[ curl -v $BASE_URL/health/ (timeout 5s) ]"
+    (curl -v --connect-timeout 5 --max-time 5 "$BASE_URL/health/" 2>&1 || true)
+    echo ""
+    echo "--- 진단 끝 ---"
     exit 1
   fi
 }

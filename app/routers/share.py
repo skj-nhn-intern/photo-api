@@ -13,13 +13,14 @@ from app.database import get_db
 from app.schemas.share import SharedAlbumResponse
 from app.services.album import AlbumService
 from app.services.photo import PhotoService
+from app.middlewares.rate_limit_middleware import get_rate_limit_decorator, get_client_identifier
 from app.utils.prometheus_metrics import (
     share_link_access_total,
     share_link_brute_force_attempts,
     share_link_access_duration_seconds,
     share_link_image_access_total,
+    rate_limit_requests_total,
 )
-from app.utils.client_ip import get_client_ip
 from fastapi import Request
 
 logger = logging.getLogger("app.share")
@@ -51,9 +52,6 @@ async def get_shared_album(
     The CDN URLs include auth tokens that expire after a configured time.
     """
     start_time = time.perf_counter()
-<<<<<<< HEAD
-    client_id = get_client_ip(request)
-=======
     client_id = get_client_identifier(request)
     
     # 메트릭 수집: Rate limit 체크 요청 (허용됨)
@@ -61,7 +59,6 @@ async def get_shared_album(
         endpoint=request.url.path,
         status="allowed",
     ).inc()
->>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
     
     album_service = AlbumService(db)
     share_link = await album_service.get_share_link_by_token(token)
@@ -168,7 +165,7 @@ async def get_shared_album_image(
     try:
         file_content = await photo_service.download_photo(photo)
     except Exception as e:
-        logger.error("Shared photo stream failed", exc_info=e, extra={"event": "share", "photo_id": photo_id})
+        logger.error("Shared photo stream failed", exc_info=e, extra={"event": "share_stream", "photo_id": photo_id})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load photo")
     return Response(
         content=file_content,

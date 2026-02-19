@@ -220,7 +220,7 @@ async def get_presigned_upload_url(
     except Exception as e:
         # 메트릭 수집: Presigned URL 생성 실패
         presigned_url_generation_total.labels(result="failure").inc()
-        logger.error("Presigned URL generation failed", exc_info=e, extra={"event": "photo", "user_id": current_user.id})
+        logger.error("Presigned URL generation failed", exc_info=e, extra={"event": "photo_presigned", "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Presigned URL 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
@@ -282,7 +282,7 @@ async def confirm_photo_upload(
         # 메트릭 수집: 업로드 확인 실패
         photo_upload_confirm_total.labels(result="failure").inc()
         photo_upload_total.labels(upload_method="presigned", result="failure").inc()
-        logger.error("Photo upload confirmation failed", exc_info=e, extra={"event": "photo", "user_id": current_user.id})
+        logger.error("Photo upload confirmation failed", exc_info=e, extra={"event": "photo_upload_confirm", "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="업로드 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
@@ -400,7 +400,7 @@ async def upload_photo(
     except Exception as e:
         # 메트릭 수집: 직접 업로드 실패
         photo_upload_total.labels(upload_method="direct", result="failure").inc()
-        logger.error("Photo upload failed", exc_info=e, extra={"event": "photo", "user_id": current_user.id})
+        logger.error("Photo upload failed", exc_info=e, extra={"event": "photo_upload", "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
@@ -495,7 +495,7 @@ async def get_photo_image(
         image_access_total.labels(access_type="authenticated", result="denied").inc()
         duration = time.perf_counter() - start_time
         image_access_duration_seconds.labels(access_type="authenticated", result="denied").observe(duration)
-        logger.error("Photo stream failed", exc_info=e, extra={"event": "photo", "photo_id": photo_id})
+        logger.error("Photo stream failed", exc_info=e, extra={"event": "photo_stream", "photo_id": photo_id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load photo",
@@ -619,7 +619,7 @@ async def download_photo(
             },
         )
     except Exception as e:
-        logger.error("Photo download failed", exc_info=e, extra={"event": "photo", "photo_id": photo_id})
+        logger.error("Photo download failed", exc_info=e, extra={"event": "photo_download", "photo_id": photo_id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to download photo",

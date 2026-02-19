@@ -8,7 +8,6 @@ https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-tok
 import logging
 import time
 from typing import Optional, List
-from collections import OrderedDict
 
 import httpx
 
@@ -17,8 +16,6 @@ from app.utils.prometheus_metrics import (
     external_request_errors_total,
     record_external_request,
 )
-from app.utils.retry import retry_with_backoff, DEFAULT_RETRYABLE_EXCEPTIONS
-from app.utils.circuit_breaker import get_cdn_circuit_breaker
 
 logger = logging.getLogger("app.cdn")
 
@@ -37,13 +34,9 @@ class NHNCDNService:
     # NHN Cloud CDN API 엔드포인트
     CDN_API_URL = "https://cdn.api.nhncloudservice.com"
     
-    # 최대 캐시 항목 수 (LRU eviction)
-    MAX_CACHE_SIZE = 1000
-    
     def __init__(self):
         self.settings = get_settings()
-        # LRU 캐시로 변경 (OrderedDict 사용)
-        self._token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
+        self._token_cache: dict[str, tuple[str, float]] = {}  # path -> (token, expire_time)
     
     async def _request_auth_token(
         self,
@@ -91,37 +84,24 @@ class NHNCDNService:
             headers["Authorization"] = self.settings.nhn_cdn_secret_key
         
         try:
-            # Circuit Breaker와 재시도 로직 적용
-            breaker = get_cdn_circuit_breaker()
-            
-            async def _token_request():
-                async with record_external_request("nhn_cdn"):
-                    async with httpx.AsyncClient(timeout=self.settings.cdn_timeout) as client:
-                        response = await client.post(url, json=payload, headers=headers)
-                        response.raise_for_status()
-                        data = response.json()
-                        if data.get("header", {}).get("isSuccessful"):
-                            token = data.get("authToken", {}).get("singlePathToken")
-                            return token
-                        else:
-                            raise Exception(f"CDN auth token failed: {response.status_code}")
-            
-            # Circuit Breaker + 재시도 적용
-            token = await breaker.call(
-                retry_with_backoff,
-                _token_request,
-                max_retries=self.settings.retry_max_attempts_cdn,
-                initial_delay=1.0,
-                retryable_exceptions=DEFAULT_RETRYABLE_EXCEPTIONS + (httpx.HTTPStatusError,),
-            )
-            return token
+            async with record_external_request("nhn_cdn"):
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, headers=headers)
 
-        except Exception as e:
-            logger.error(
-                "CDN auth token API error",
-                exc_info=e,
-                extra={"event": "cdn", "error_type": type(e).__name__}
-            )
+                    data = response.json()
+                    if data.get("header", {}).get("isSuccessful"):
+                        token = data.get("authToken", {}).get("singlePathToken")
+                        return token
+                    else:
+                        logger.error(
+                            "CDN auth token failed",
+                            extra={"event": "cdn_token", "status": response.status_code},
+                        )
+                        external_request_errors_total.labels(service="nhn_cdn").inc()
+                        return None
+
+        except httpx.HTTPError as e:
+            logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn_token"})
             external_request_errors_total.labels(service="nhn_cdn").inc()
             return None
     
@@ -169,22 +149,23 @@ class NHNCDNService:
         else:
             cdn_path = f"/{container}/{object_path}"
         
-        # 캐시 확인 (LRU)
+        # 캐시 확인
         cache_key = cdn_path
-        cached_token = self._get_cached_token(cache_key)
-        if cached_token:
-            return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
+        if cache_key in self._token_cache:
+            cached_token, expire_time = self._token_cache[cache_key]
+            if time.time() < expire_time - 60:  # 1분 여유
+                return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
         
         # Auth Token 생성 (CDN API 호출)
         token = await self._request_auth_token(cdn_path, expires_in)
         
         if token:
-            self._cache_token(cache_key, token, time.time() + expires_in)
+            self._token_cache[cache_key] = (token, time.time() + expires_in)
             return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={token}"
         # 토큰 실패 시 None → 라우터에서 302 대신 백엔드 스트리밍 (SignatureDoesNotMatch/403 방지)
         logger.warning(
             "CDN auth token failed, caller should stream from backend",
-            extra={"event": "cdn", "path": cdn_path},
+            extra={"event": "cdn_token", "path": cdn_path},
         )
         return None
 
@@ -208,7 +189,7 @@ class NHNCDNService:
         if not self.settings.nhn_cdn_domain or not self.settings.nhn_cdn_app_key:
             logger.warning(
                 "generate_auth_token_url_sync: OBS URL 반환 (보안 위험)",
-                extra={"event": "cdn", "path": object_path}
+                extra={"event": "cdn_obs_fallback", "path": object_path}
             )
             return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
         
@@ -223,17 +204,18 @@ class NHNCDNService:
         else:
             cdn_path = f"/{container}/{object_path}"
         
-        # 캐시에서 토큰 확인 (LRU)
+        # 캐시에서 토큰 확인
         cache_key = cdn_path
-        cached_token = self._get_cached_token(cache_key)
-        if cached_token:
-            return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
+        if cache_key in self._token_cache:
+            cached_token, expire_time = self._token_cache[cache_key]
+            if time.time() < expire_time - 60:
+                return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
         
         # 캐시에 없으면 Object Storage URL 반환 (비동기 토큰 생성 필요)
         # ⚠️ 보안 경고: OBS URL을 반환하면 public OBS에 직접 접근 가능
         logger.warning(
             "generate_auth_token_url_sync: OBS URL 반환 (보안 위험, 토큰 캐시 없음)",
-            extra={"event": "cdn", "path": object_path}
+            extra={"event": "cdn_obs_fallback", "path": object_path}
         )
         return f"{self.settings.nhn_storage_url}/{self.settings.nhn_storage_container}/{object_path}"
 

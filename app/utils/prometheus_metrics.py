@@ -75,8 +75,13 @@ active_sessions = Gauge(
     registry=REGISTRY,
 )
 
-<<<<<<< HEAD
-=======
+# 진행 중인 요청 수 (Graceful shutdown용)
+in_flight_requests = Gauge(
+    "photo_api_in_flight_requests",
+    "Number of requests currently being processed",
+    registry=REGISTRY,
+)
+
 # --- Rate Limiting ---
 rate_limit_hits_total = Counter(
     "photo_api_rate_limit_hits_total",
@@ -92,7 +97,6 @@ rate_limit_requests_total = Counter(
     registry=REGISTRY,
 )
 
->>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
 # --- Share Link Access Patterns ---
 share_link_access_total = Counter(
     "photo_api_share_link_access_total",
@@ -139,45 +143,6 @@ image_access_duration_seconds = Histogram(
     registry=REGISTRY,
 )
 
-<<<<<<< HEAD
-# --- Health Check ---
-health_check_status = Gauge(
-    "photo_api_health_check_status",
-    "Health check status (1=healthy, 0=unhealthy)",
-    ["check"],  # check: database | object_storage | overall
-    registry=REGISTRY,
-)
-
-# --- Circuit Breaker ---
-circuit_breaker_state = Gauge(
-    "photo_api_circuit_breaker_state",
-    "Circuit breaker state (1=current state, 0=other states)",
-    ["service", "state"],  # service: nhn_storage | nhn_cdn, state: closed | open | half_open
-    registry=REGISTRY,
-)
-
-# --- Request Tracking ---
-in_flight_requests_metric = Gauge(
-    "photo_api_in_flight_requests",
-    "Number of in-flight requests (for graceful shutdown)",
-    registry=REGISTRY,
-)
-
-# --- DB Connection Pool ---
-db_pool_active_connections = Gauge(
-    "photo_api_db_pool_active_connections",
-    "Number of active database connections in pool",
-    registry=REGISTRY,
-)
-
-db_pool_waiting_requests = Gauge(
-    "photo_api_db_pool_waiting_requests",
-    "Number of requests waiting for database connection",
-    registry=REGISTRY,
-)
-
-=======
->>>>>>> e5275842b063860b231ec5810202b146e5fc1f54
 # --- Photo Upload Metrics ---
 photo_upload_total = Counter(
     "photo_api_photo_upload_total",

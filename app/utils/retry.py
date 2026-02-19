@@ -1,105 +1,186 @@
 """
-Retry utility with exponential backoff for external service calls.
+재시도 로직 구현 (Exponential Backoff).
+
+외부 서비스 호출 실패 시 자동 재시도를 제공합니다.
+지수 백오프를 사용하여 서비스 부하를 완화합니다.
 """
 import asyncio
 import logging
-from typing import Callable, TypeVar, Optional, Tuple, Any
+import random
+from typing import Callable, TypeVar, Optional, Type
 
 logger = logging.getLogger("app.retry")
 
-T = TypeVar('T')
-
-# 기본 재시도 가능한 예외 (네트워크/일시적 오류)
-DEFAULT_RETRYABLE_EXCEPTIONS = (
-    ConnectionError,
-    TimeoutError,
-    asyncio.TimeoutError,
-)
+T = TypeVar("T")
 
 
 async def retry_with_backoff(
     func: Callable[..., T],
-    max_retries: int = 3,
+    max_attempts: int = 3,
     initial_delay: float = 1.0,
     max_delay: float = 10.0,
     exponential_base: float = 2.0,
-    retryable_exceptions: Tuple[type, ...] = DEFAULT_RETRYABLE_EXCEPTIONS,
+    jitter: bool = True,
+    retryable_exceptions: tuple[Type[Exception], ...] = (Exception,),
+    target: Optional[str] = None,
     *args,
-    **kwargs
+    **kwargs,
 ) -> T:
     """
-    Retry a function with exponential backoff.
+    Exponential Backoff를 사용한 재시도 로직.
     
     Args:
-        func: Async function to retry
-        max_retries: Maximum number of retry attempts (default: 3)
-        initial_delay: Initial delay in seconds (default: 1.0)
-        max_delay: Maximum delay in seconds (default: 10.0)
-        exponential_base: Base for exponential backoff (default: 2.0)
-        retryable_exceptions: Tuple of exceptions to retry
-        *args, **kwargs: Arguments to pass to func
-    
+        func: 호출할 함수 (async 또는 sync)
+        max_attempts: 최대 재시도 횟수 (총 시도 횟수 = max_attempts)
+        initial_delay: 초기 지연 시간 (초)
+        max_delay: 최대 지연 시간 (초)
+        exponential_base: 지수 백오프 베이스
+        jitter: 지터(랜덤 지연) 추가 여부
+        retryable_exceptions: 재시도할 예외 타입
+        target: 재시도 대상 식별 (예: "storage.upload", "cdn.token") — 로그/대시보드용
+        *args, **kwargs: 함수 인자
+        
     Returns:
-        Result of func
-    
+        함수 반환값
+        
     Raises:
-        Last exception if all retries fail
-    
-    Example:
-        ```python
-        result = await retry_with_backoff(
-            storage_service.upload_file,
-            max_retries=3,
-            file_content=data,
-            object_name="path/to/file.jpg"
-        )
-        ```
+        마지막 시도에서 발생한 예외
     """
-    last_exception = None
-    delay = initial_delay
+    last_exception: Optional[Exception] = None
     
-    for attempt in range(max_retries):
+    for attempt in range(max_attempts):
         try:
-            return await func(*args, **kwargs)
+            # async 함수인지 확인
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            else:
+                return func(*args, **kwargs)
+                
         except retryable_exceptions as e:
             last_exception = e
-            if attempt < max_retries - 1:
-                logger.warning(
-                    f"Retry attempt {attempt + 1}/{max_retries} failed: {type(e).__name__}",
-                    extra={
-                        "event": "retry",
-                        "attempt": attempt + 1,
-                        "max_retries": max_retries,
-                        "error_type": type(e).__name__,
-                        "error_message": str(e)[:100],
-                    }
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * exponential_base, max_delay)
-            else:
-                logger.error(
-                    f"All retry attempts failed: {type(e).__name__}",
-                    extra={
-                        "event": "retry",
-                        "attempt": attempt + 1,
-                        "max_retries": max_retries,
-                        "error_type": type(e).__name__,
-                        "error_message": str(e)[:100],
-                    }
-                )
-        except Exception as e:
-            # 재시도 불가능한 예외는 즉시 전파
-            logger.error(
-                f"Non-retryable exception: {type(e).__name__}",
-                extra={
+            
+            # 마지막 시도면 예외 발생
+            if attempt == max_attempts - 1:
+                extra_err = {
                     "event": "retry",
+                    "attempt": attempt + 1,
+                    "max_attempts": max_attempts,
                     "error_type": type(e).__name__,
-                    "error_message": str(e)[:100],
                 }
+                if target is not None:
+                    extra_err["retry_target"] = target
+                logger.error(
+                    f"Retry exhausted after {max_attempts} attempts",
+                    extra=extra_err,
+                    exc_info=True,
+                )
+                raise
+            
+            # 지연 시간 계산 (지수 백오프)
+            delay = min(
+                initial_delay * (exponential_base ** attempt),
+                max_delay,
             )
-            raise
+            
+            # 지터 추가 (선택적)
+            if jitter:
+                delay = delay * (0.5 + random.random() * 0.5)  # 50% ~ 150%
+            
+            extra_warn = {
+                "event": "retry",
+                "attempt": attempt + 1,
+                "max_attempts": max_attempts,
+                "delay": delay,
+                "error_type": type(e).__name__,
+            }
+            if target is not None:
+                extra_warn["retry_target"] = target
+            logger.warning(
+                f"Retry attempt {attempt + 1}/{max_attempts} after {delay:.2f}s",
+                extra=extra_warn,
+            )
+            
+            await asyncio.sleep(delay)
+    
+    # 이 코드는 도달하지 않아야 하지만 타입 체커를 위해
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("Retry logic error")
+
+
+def retry_sync(
+    func: Callable[..., T],
+    max_attempts: int = 3,
+    initial_delay: float = 1.0,
+    max_delay: float = 10.0,
+    exponential_base: float = 2.0,
+    retryable_exceptions: tuple[Type[Exception], ...] = (Exception,),
+    target: Optional[str] = None,
+    *args,
+    **kwargs,
+) -> T:
+    """
+    동기 함수용 재시도 로직 (간단한 버전).
+    
+    Args:
+        func: 호출할 동기 함수
+        max_attempts: 최대 재시도 횟수
+        initial_delay: 초기 지연 시간 (초)
+        max_delay: 최대 지연 시간 (초)
+        exponential_base: 지수 백오프 베이스
+        retryable_exceptions: 재시도할 예외 타입
+        target: 재시도 대상 식별 (예: "storage.upload", "cdn.token") — 로그/대시보드용
+        *args, **kwargs: 함수 인자
+        
+    Returns:
+        함수 반환값
+    """
+    import time
+    
+    last_exception: Optional[Exception] = None
+    
+    for attempt in range(max_attempts):
+        try:
+            return func(*args, **kwargs)
+        except retryable_exceptions as e:
+            last_exception = e
+            
+            if attempt == max_attempts - 1:
+                extra_err = {
+                    "event": "retry",
+                    "attempt": attempt + 1,
+                    "max_attempts": max_attempts,
+                    "error_type": type(e).__name__,
+                }
+                if target is not None:
+                    extra_err["retry_target"] = target
+                logger.error(
+                    f"Sync retry exhausted after {max_attempts} attempts",
+                    extra=extra_err,
+                )
+                raise
+            
+            delay = min(
+                initial_delay * (exponential_base ** attempt),
+                max_delay,
+            )
+            
+            extra_warn = {
+                "event": "retry",
+                "attempt": attempt + 1,
+                "max_attempts": max_attempts,
+                "delay": delay,
+                "error_type": type(e).__name__,
+            }
+            if target is not None:
+                extra_warn["retry_target"] = target
+            logger.warning(
+                f"Sync retry attempt {attempt + 1}/{max_attempts} after {delay:.2f}s",
+                extra=extra_warn,
+            )
+            
+            time.sleep(delay)
     
     if last_exception:
         raise last_exception
-    else:
-        raise RuntimeError("Retry failed without exception")
+    raise RuntimeError("Retry logic error")
