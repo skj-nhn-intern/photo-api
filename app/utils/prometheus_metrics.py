@@ -196,6 +196,58 @@ share_link_creation_total = Counter(
     registry=REGISTRY,
 )
 
+# --- Business Growth Metrics ---
+# 서비스 성장 지표: 회원수, 앨범 수, 사진 수 등
+users_total = Gauge(
+    "photo_api_users_total",
+    "Total number of registered users",
+    ["status"],  # status: total | active
+    registry=REGISTRY,
+)
+
+albums_total = Gauge(
+    "photo_api_albums_total",
+    "Total number of albums",
+    ["type"],  # type: total | shared (has share links)
+    registry=REGISTRY,
+)
+
+photos_total = Gauge(
+    "photo_api_photos_total",
+    "Total number of photos",
+    registry=REGISTRY,
+)
+
+share_links_total = Gauge(
+    "photo_api_share_links_total",
+    "Total number of share links",
+    ["status"],  # status: total | active
+    registry=REGISTRY,
+)
+
+# --- Object Storage Usage Metrics ---
+# Object Storage 사용량 추적: 누가, 언제부터 용량이 급증했는지
+object_storage_usage_bytes = Gauge(
+    "photo_api_object_storage_usage_bytes",
+    "Total object storage usage in bytes",
+    registry=REGISTRY,
+)
+
+object_storage_usage_by_user_bytes = Gauge(
+    "photo_api_object_storage_usage_by_user_bytes",
+    "Object storage usage by user in bytes",
+    ["user_id"],  # user_id: 사용자 ID
+    registry=REGISTRY,
+)
+
+# 사진 업로드 시 실시간 업데이트용 Counter (시간별 추이 분석용)
+photo_upload_size_total = Counter(
+    "photo_api_photo_upload_size_total_bytes",
+    "Total photo upload size in bytes (cumulative)",
+    ["user_id"],  # user_id: 사용자 ID
+    registry=REGISTRY,
+)
+
 
 class LogQueueSizeCollector:
     """Collector that reports NHN logger queue size (backpressure indicator)."""
@@ -212,6 +264,126 @@ class LogQueueSizeCollector:
         )
         metric.add_metric([], float(size))
         yield metric
+
+
+async def update_business_metrics() -> None:
+    """
+    DB에서 비즈니스 메트릭을 집계하여 업데이트.
+    
+    주기적으로 호출되어 서비스 성장 지표를 업데이트합니다:
+    - 회원수 (전체, 활성)
+    - 앨범 수 (전체, 공유 앨범)
+    - 사진 수
+    - 공유 링크 수 (전체, 활성)
+    - Object Storage 사용량 (전체, 사용자별)
+    """
+    try:
+        from app.database import get_db_context
+        from app.models.user import User
+        from app.models.album import Album
+        from app.models.photo import Photo
+        from app.models.share import ShareLink
+        from sqlalchemy import select, func
+        
+        async with get_db_context() as db:
+            # 회원수 집계
+            total_users_result = await db.execute(select(func.count(User.id)))
+            total_users = total_users_result.scalar() or 0
+            
+            active_users_result = await db.execute(
+                select(func.count(User.id)).where(User.is_active == True)
+            )
+            active_users = active_users_result.scalar() or 0
+            
+            # 앨범 수 집계
+            total_albums_result = await db.execute(select(func.count(Album.id)))
+            total_albums = total_albums_result.scalar() or 0
+            
+            # 공유 앨범 수 (share_links가 있는 앨범)
+            shared_albums_result = await db.execute(
+                select(func.count(func.distinct(Album.id)))
+                .join(ShareLink, ShareLink.album_id == Album.id)
+                .where(ShareLink.is_active == True)
+            )
+            shared_albums = shared_albums_result.scalar() or 0
+            
+            # 사진 수 집계
+            total_photos_result = await db.execute(select(func.count(Photo.id)))
+            total_photos = total_photos_result.scalar() or 0
+            
+            # 공유 링크 수 집계
+            total_share_links_result = await db.execute(select(func.count(ShareLink.id)))
+            total_share_links = total_share_links_result.scalar() or 0
+            
+            active_share_links_result = await db.execute(
+                select(func.count(ShareLink.id))
+                .where(ShareLink.is_active == True)
+                .where(
+                    (ShareLink.expires_at.is_(None)) | 
+                    (ShareLink.expires_at > func.now())
+                )
+            )
+            active_share_links = active_share_links_result.scalar() or 0
+            
+            # Object Storage 사용량 집계 (사진 파일 크기 합계)
+            total_storage_result = await db.execute(
+                select(func.sum(Photo.file_size))
+            )
+            total_storage = total_storage_result.scalar() or 0
+            
+            # 사용자별 Object Storage 사용량
+            user_storage_result = await db.execute(
+                select(Photo.owner_id, func.sum(Photo.file_size).label("total_size"))
+                .group_by(Photo.owner_id)
+            )
+            user_storage_map = {row.owner_id: row.total_size for row in user_storage_result}
+            
+            # 메트릭 업데이트
+            users_total.labels(status="total").set(total_users)
+            users_total.labels(status="active").set(active_users)
+            
+            albums_total.labels(type="total").set(total_albums)
+            albums_total.labels(type="shared").set(shared_albums)
+            
+            photos_total.set(total_photos)
+            
+            share_links_total.labels(status="total").set(total_share_links)
+            share_links_total.labels(status="active").set(active_share_links)
+            
+            object_storage_usage_bytes.set(total_storage)
+            
+            # 사용자별 사용량 업데이트
+            # Note: Prometheus Gauge는 라벨이 없으면 자동으로 제거되지 않으므로
+            # 실제 운영에서는 별도 정리 로직이 필요할 수 있습니다.
+            for user_id, size in user_storage_map.items():
+                object_storage_usage_by_user_bytes.labels(user_id=str(user_id)).set(size)
+                
+    except Exception as e:
+        logger.warning("Business metrics update failed: %s", e, exc_info=False)
+
+
+async def business_metrics_loop() -> None:
+    """
+    백그라운드 루프: 주기적으로 비즈니스 메트릭을 업데이트.
+    """
+    interval = 60  # 60초마다 업데이트
+    logger.info(
+        "Business metrics collection enabled: interval=%ds",
+        interval,
+        extra={"event": "lifecycle"},
+    )
+    
+    # 시작 시 즉시 한 번 실행
+    await update_business_metrics()
+    
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await update_business_metrics()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning("Business metrics update failed: %s", e, exc_info=False)
 
 
 def _node_identity() -> str:

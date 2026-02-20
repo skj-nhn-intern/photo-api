@@ -455,7 +455,146 @@
 
 ---
 
-## 7. 대시보드 구성 가이드
+## 7. 비즈니스 성장 지표 (Business Growth Metrics)
+
+### 7.1 서비스 성장 추적
+
+#### `photo_api_users_total`
+- **타입**: Gauge
+- **설명**: 전체 회원수 및 활성 회원수
+- **라벨**: `status` (total | active)
+- **구현 방식**: 
+  - 백그라운드 태스크(`business_metrics_loop`)에서 60초마다 DB 집계
+  - 회원가입 시 실시간 증가 (`users_total.labels(status="total").inc()`)
+- **핵심 모니터링 포인트**:
+  - 서비스 성장 추이 (회원수 증가율)
+  - 활성 회원 비율 (전체 대비 활성 회원)
+  - 회원가입 트렌드 분석
+- **대시보드 활용**:
+  - Time series: 시간별 회원수 추이
+  - Stat: 현재 전체/활성 회원수
+  - Growth rate: `rate(photo_api_users_total{status="total"}[1h])`
+
+#### `photo_api_albums_total`
+- **타입**: Gauge
+- **설명**: 전체 앨범 수 및 공유 앨범 수
+- **라벨**: `type` (total | shared)
+- **구현 방식**: 
+  - 백그라운드 태스크에서 60초마다 DB 집계
+  - 앨범 생성 시 실시간 증가 (`albums_total.labels(type="total").inc()`)
+- **핵심 모니터링 포인트**:
+  - 앨범 생성 추이
+  - 공유 앨범 비율 (전체 대비 공유 앨범)
+  - 사용자당 평균 앨범 수
+- **대시보드 활용**:
+  - Time series: 시간별 앨범 수 추이
+  - Stat: 현재 전체/공유 앨범 수
+  - 공유율: `photo_api_albums_total{type="shared"} / photo_api_albums_total{type="total"} * 100`
+
+#### `photo_api_photos_total`
+- **타입**: Gauge
+- **설명**: 전체 사진 수
+- **구현 방식**: 
+  - 백그라운드 태스크에서 60초마다 DB 집계
+  - 사진 업로드 확인 시 실시간 증가 (`photos_total.inc()`)
+- **핵심 모니터링 포인트**:
+  - 사진 업로드 추이
+  - 사용자당 평균 사진 수
+  - 앨범당 평균 사진 수
+- **대시보드 활용**:
+  - Time series: 시간별 사진 수 추이
+  - Stat: 현재 전체 사진 수
+  - 업로드 속도: `rate(photo_api_photos_total[1h])`
+
+#### `photo_api_share_links_total`
+- **타입**: Gauge
+- **설명**: 전체 공유 링크 수 및 활성 공유 링크 수
+- **라벨**: `status` (total | active)
+- **구현 방식**: 
+  - 백그라운드 태스크에서 60초마다 DB 집계
+  - 공유 링크 생성 시 실시간 증가 (`share_links_total.labels(status="total").inc()`)
+- **핵심 모니터링 포인트**:
+  - 공유 링크 생성 추이
+  - 활성 공유 링크 비율
+  - 공유 기능 사용률
+- **대시보드 활용**:
+  - Time series: 시간별 공유 링크 수 추이
+  - Stat: 현재 전체/활성 공유 링크 수
+
+### 7.2 Object Storage 사용량 추적
+
+#### `photo_api_object_storage_usage_bytes`
+- **타입**: Gauge
+- **설명**: 전체 Object Storage 사용량 (바이트)
+- **구현 방식**: 
+  - 백그라운드 태스크에서 60초마다 DB 집계 (모든 사진의 `file_size` 합계)
+  - 사진 업로드 확인 시 실시간 증가 (`object_storage_usage_bytes.inc(photo.file_size)`)
+- **핵심 모니터링 포인트**:
+  - **용량 급증 탐지**: 갑자기 사용량이 늘어났는지 확인
+  - **비용 관리**: Object Storage 비용 예측
+  - **성장 추이**: 시간별 사용량 증가율
+- **대시보드 활용**:
+  - Time series: 시간별 사용량 추이 (GB 단위로 변환)
+  - Stat: 현재 사용량 (GB)
+  - 증가율: `rate(photo_api_object_storage_usage_bytes[1h])`
+  - **알림 기준**:
+    - **Warning**: 1시간 내 10% 이상 증가
+    - **Critical**: 1시간 내 50% 이상 증가 (비정상적 업로드 가능성)
+
+#### `photo_api_object_storage_usage_by_user_bytes`
+- **타입**: Gauge
+- **설명**: 사용자별 Object Storage 사용량 (바이트)
+- **라벨**: `user_id` (사용자 ID)
+- **구현 방식**: 
+  - 백그라운드 태스크에서 60초마다 DB 집계 (사용자별 `file_size` 합계)
+  - 사진 업로드 확인 시 실시간 증가 (`object_storage_usage_by_user_bytes.labels(user_id=str(user_id)).inc(photo.file_size)`)
+- **핵심 모니터링 포인트**:
+  - **누가 많이 올렸는지**: 상위 사용자 식별
+  - **이상 사용자 탐지**: 특정 사용자가 비정상적으로 많은 용량 사용
+  - **사용자별 사용량 분포**: 대부분의 용량을 소수의 사용자가 사용하는지 확인
+- **대시보드 활용**:
+  - Table: 사용자별 사용량 상위 N개 (user_id, 사용량 GB)
+  - Bar chart: 사용자별 사용량 분포
+  - **알림 기준**:
+    - **Warning**: 특정 사용자가 1시간 내 1GB 이상 업로드
+    - **Critical**: 특정 사용자가 1시간 내 10GB 이상 업로드 (비정상적 활동)
+
+#### `photo_api_photo_upload_size_total_bytes`
+- **타입**: Counter
+- **설명**: 누적 사진 업로드 용량 (시간별 추이 분석용)
+- **라벨**: `user_id` (사용자 ID)
+- **구현 방식**: 
+  - 사진 업로드 확인 시 증가 (`photo_upload_size_total.labels(user_id=str(user_id)).inc(photo.file_size)`)
+- **핵심 모니터링 포인트**:
+  - **언제부터 용량이 급증했는지**: 시간별 업로드 용량 추이
+  - **사용자별 업로드 패턴**: 특정 시간대에 집중 업로드하는 사용자 식별
+- **대시보드 활용**:
+  - Time series: 시간별 업로드 용량 (rate 기반)
+  - Heatmap: 시간 × 사용자별 업로드 용량
+  - **쿼리 예시**:
+    - 시간별 업로드 용량: `rate(photo_api_photo_upload_size_total_bytes[5m])`
+    - 사용자별 시간별 업로드: `sum by (user_id) (rate(photo_api_photo_upload_size_total_bytes[5m]))`
+
+### 7.3 비즈니스 메트릭 수집 방식
+
+**실시간 업데이트:**
+- 회원가입, 앨범 생성, 사진 업로드, 공유 링크 생성 시 즉시 메트릭 증가
+- Object Storage 사용량도 업로드 시 즉시 반영
+
+**주기적 집계 (백그라운드 태스크):**
+- 60초마다 DB에서 전체 집계하여 메트릭 업데이트
+- 실시간 업데이트와 주기적 집계를 병행하여 정확성 보장
+- DB 집계는 실시간 업데이트가 누락된 경우를 보완
+
+**메트릭 수집 이유:**
+1. **서비스 성장 추적**: 회원수, 앨범 수, 사진 수 추이로 서비스 성장률 파악
+2. **용량 관리**: Object Storage 사용량 급증 시 조기 탐지 및 비용 관리
+3. **이상 탐지**: 특정 사용자의 비정상적 업로드 패턴 탐지
+4. **비즈니스 의사결정**: 서비스 성장 데이터를 바탕으로 기능 개발 우선순위 결정
+
+---
+
+## 8. 대시보드 구성 가이드
 
 ### 7.1 대시보드 선정 기준
 
@@ -608,9 +747,9 @@
 
 ---
 
-## 8. 알림 규칙 (Alert Rules)
+## 9. 알림 규칙 (Alert Rules)
 
-### 8.1 Prometheus Alertmanager 설정
+### 9.1 Prometheus Alertmanager 설정
 
 ```yaml
 groups:
@@ -797,7 +936,7 @@ groups:
           description: "디스크 사용률이 {{$value}}%로 90%를 초과했습니다."
 ```
 
-### 8.2 알림 채널 설정
+### 9.2 알림 채널 설정
 
 **권장 알림 채널:**
 1. **Slack**: 개발팀 채널에 실시간 알림
@@ -810,9 +949,9 @@ groups:
 
 ---
 
-## 9. 핵심 모니터링 체크리스트
+## 10. 핵심 모니터링 체크리스트
 
-### 9.1 실시간 모니터링 (24/7)
+### 10.1 실시간 모니터링 (24/7)
 
 **매 시간 확인:**
 - [ ] 서비스 가용성 (`photo_api_ready == 1`)
@@ -826,14 +965,14 @@ groups:
 - [ ] 외부 서비스 상태 (Object Storage, CDN, Log Service)
 - [ ] 비즈니스 지표 트렌드 (회원가입, 로그인, 업로드)
 
-### 9.2 주간 리뷰
+### 10.2 주간 리뷰
 
 - [ ] 알림 규칙 최적화 (False positive 제거)
 - [ ] 대시보드 개선 (필요한 지표 추가/제거)
 - [ ] 성능 트렌드 분석 (응답 시간, 처리량)
 - [ ] 보안 이벤트 리뷰 (공격 패턴 분석)
 
-### 9.3 월간 리뷰
+### 10.3 월간 리뷰
 
 - [ ] SLA 달성 여부 확인 (가용성 99.9% 목표)
 - [ ] 리소스 사용량 최적화 (스케일링 필요 여부)
@@ -842,7 +981,7 @@ groups:
 
 ---
 
-## 10. 메트릭 구현 우선순위
+## 11. 메트릭 구현 우선순위
 
 ### Phase 1: 필수 지표 (즉시 구현)
 1. ✅ 서비스 상태 (`photo_api_ready`)
@@ -863,9 +1002,17 @@ groups:
 2. ✅ 공유 링크 접근 패턴 (`photo_api_share_link_access_total`)
 3. ✅ 이미지 접근 패턴 (`photo_api_image_access_total`)
 
+### Phase 4: 비즈니스 성장 지표 (서비스 성장 추적)
+1. ✅ 회원수 (`photo_api_users_total`)
+2. ✅ 앨범 수 (`photo_api_albums_total`)
+3. ✅ 사진 수 (`photo_api_photos_total`)
+4. ✅ 공유 링크 수 (`photo_api_share_links_total`)
+5. ✅ Object Storage 사용량 (`photo_api_object_storage_usage_bytes`)
+6. ✅ 사용자별 Object Storage 사용량 (`photo_api_object_storage_usage_by_user_bytes`)
+
 ---
 
-## 11. 참고 자료
+## 12. 참고 자료
 
 - [Prometheus 공식 문서](https://prometheus.io/docs/)
 - [Grafana 대시보드 가이드](https://grafana.com/docs/grafana/latest/dashboards/)
@@ -875,7 +1022,7 @@ groups:
 
 ---
 
-## 12. 결론
+## 13. 결론
 
 이 문서에서 정의한 모니터링 지표를 통해 Photo API 서비스의 고가용성을 보장할 수 있습니다. 
 
@@ -886,6 +1033,7 @@ groups:
 4. **보안**: Rate limiting, 브루트포스 공격, 의심스러운 활동
 5. **리소스**: CPU, 메모리, 디스크, 네트워크 사용량
 6. **비즈니스**: 사용자 활동, 업로드/다운로드 추세
+7. **서비스 성장**: 회원수, 앨범 수, 사진 수, Object Storage 사용량 추이
 
 **다음 단계:**
 1. Grafana 대시보드 구성

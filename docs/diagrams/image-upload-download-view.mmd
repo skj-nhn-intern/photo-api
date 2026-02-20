@@ -1,0 +1,153 @@
+%% 이미지 업로드·다운로드·조회 흐름 (photo-api)
+%% Mermaid 다이어그램 — 이미지 업로드, 다운로드, 조회 및 보안 구조
+
+%% ========== 1. 이미지 업로드 (Presigned URL 방식 — 권장) ==========
+sequenceDiagram
+    autonumber
+    participant Client as 클라이언트
+    participant API as photo-api (백엔드)
+    participant DB as DB
+    participant OBS as Object Storage (OBS)
+
+    Client->>+API: POST /photos/presigned-url (JWT, album_id, filename, content_type, file_size)
+    API->>API: JWT 검증, 앨범 소유권 확인
+    API->>DB: Photo 레코드 생성 (storage_path, pending)
+    API->>API: Swift Temp URL 생성 (서명, 유효기간)
+    API-->>-Client: 200 { photo_id, upload_url, upload_headers }
+
+    Client->>OBS: PUT upload_url (upload_headers + 바디)
+    Note over Client,OBS: 파일이 API를 거치지 않고 OBS로 직접 전송
+
+    Client->>+API: POST /photos/confirm (JWT, photo_id)
+    API->>API: JWT 검증, photo 소유권 확인
+    API->>OBS: 파일 존재 여부 확인 (file_exists)
+    OBS-->>API: 존재함
+    API->>DB: 앨범-사진 연결, commit
+    API-->>-Client: 200 { photo_id, url: /photos/{id}/image }
+
+%% ========== 2. 이미지 업로드 (레거시 직접 업로드) ==========
+sequenceDiagram
+    autonumber
+    participant Client as 클라이언트
+    participant API as photo-api
+    participant DB as DB
+    participant OBS as Object Storage
+
+    Client->>+API: POST /photos/ (JWT, multipart: file, album_id)
+    API->>API: JWT 검증, 파일 크기/Content-Type 검증, 앨범 소유권 확인
+    API->>API: 고유 파일명 생성 (UUID.확장자)
+    API->>OBS: upload_file(storage_path, content)
+    OBS-->>API: 성공
+    API->>DB: Photo 저장, 앨범 연결, commit
+    API-->>-Client: 201 { id, url }
+
+%% ========== 3. 이미지 조회 (보기) — JWT 필수, CDN/스트리밍 ==========
+sequenceDiagram
+    autonumber
+    participant Client as 클라이언트
+    participant API as photo-api
+    participant DB as DB
+    participant CDN as CDN (Auth Token)
+    participant OBS as Object Storage
+
+    Client->>+API: GET /photos/{id}/image + JWT
+    API->>API: JWT 검증 (get_current_active_user)
+    API->>DB: get_photo_by_id - 소유자만
+    alt 사진 없음 또는 소유자 아님
+        API-->>Client: 404 Not Found
+    else 소유자 확인 + CDN 설정 있음
+        API->>CDN: generate_auth_token_url
+        CDN-->>API: CDN URL + token
+        API-->>Client: 302 Redirect to CDN URL with token
+        Client->>CDN: GET with token
+        CDN->>OBS: 원본 요청
+        OBS-->>CDN: 파일
+        CDN-->>Client: 200 이미지
+    else 소유자 확인 + CDN 없음
+        API->>OBS: download_file
+        OBS-->>API: 파일 바이트
+        API-->>Client: 200 스트리밍
+    end
+
+%% ========== 4. 이미지 조회 — 공유 링크 (인증 불필요, 토큰만) ==========
+sequenceDiagram
+    autonumber
+    participant Client as 공유 링크 사용자
+    participant API as photo-api
+    participant DB as DB
+    participant CDN as CDN
+    participant OBS as Object Storage
+
+    Client->>+API: GET /share/{token}/photos/{photo_id}/image (JWT 없음)
+    API->>DB: get_share_link_by_token(token)
+    alt 링크 없음
+        API-->>Client: 404 Share link not found
+    else 링크 만료 또는 비활성
+        API-->>Client: 410 Gone
+    else 해당 앨범에 사진 없음
+        API->>DB: get_photo_in_album
+        API-->>Client: 404 Photo not in this album
+    else 사진 있음 + CDN 설정 있음
+        API->>DB: get_photo_in_album
+        API->>CDN: generate_auth_token_url
+        CDN-->>API: CDN URL + token
+        API-->>Client: 302 Redirect to CDN URL
+        Client->>CDN: GET with token
+        CDN->>OBS: 원본 요청
+        OBS-->>CDN: 파일
+        CDN-->>Client: 200 이미지
+    else 사진 있음 + CDN 없음
+        API->>OBS: download_file
+        OBS-->>API: 파일 바이트
+        API-->>Client: 200 스트리밍
+    end
+
+%% ========== 5. 이미지 다운로드 (첨부 파일) ==========
+sequenceDiagram
+    autonumber
+    participant Client as 클라이언트
+    participant API as photo-api
+    participant DB as DB
+    participant OBS as Object Storage
+
+    Client->>+API: GET /photos/{id}/download (Authorization: Bearer JWT)
+    API->>API: JWT 검증
+    API->>DB: get_photo_by_id(photo_id, user_id)
+    alt 사진 없음 또는 소유자 아님
+        API-->>Client: 404 Not Found
+    else 소유자 확인됨
+        API->>OBS: download_file(storage_path)
+        OBS-->>API: 파일 바이트
+        API-->>-Client: 200 Content-Disposition: attachment; filename="..."
+    end
+
+%% ========== 6. 전체 아키텍처 (업로드/조회 시 데이터 경로) ==========
+flowchart TB
+    subgraph Upload["업로드 경로"]
+        A1[클라이언트] -->|1. presigned-url 요청 (JWT)| A2[photo-api]
+        A2 -->|2. Temp URL 발급| A1
+        A1 -->|3. PUT 직접| A3[Object Storage]
+        A1 -->|4. confirm (JWT)| A2
+        A2 -->|5. file_exists 확인| A3
+    end
+
+    subgraph View["조회 경로 - 소유자 (JWT)"]
+        B1[클라이언트] -->|GET /photos/id/image + JWT| B2[photo-api]
+        B2 -->|소유자 확인| B4[(DB)]
+        B2 -->|302 CDN URL + token| B1
+        B1 -->|GET + token| B3[CDN]
+        B3 -->|원본 요청| B5[Object Storage]
+        B2 -.->|CDN 없을 때만| B5
+    end
+
+    subgraph Share["조회 경로 - 공유 링크 (JWT 없음)"]
+        C1[공유 링크 사용자] -->|GET /share/token/photos/id/image| B2
+        B2 -->|토큰 유효 + 앨범 내 사진인지 확인| B4
+        B2 -->|302 CDN 또는 스트리밍| C1
+    end
+
+    subgraph Security["보안 원칙"]
+        S1[OBS URL 절대 노출 안 함]
+        S2[소유자: JWT + 소유자만 / 공유: 토큰 + 앨범 내 사진만]
+        S3[CDN Auth Token = 짧은 유효기간]
+    end

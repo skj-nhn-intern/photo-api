@@ -7,9 +7,8 @@ set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-photo-api}"
 ENV_FILE="${ENV_FILE:-/opt/photo-api/.env}"
-LOKI_URL_DEFAULT="${LOKI_URL_DEFAULT:-http://192.168.4.73:3100}"
 
-# app/config.py 기준 환경 변수 (계정/비밀 제외한 항목에 기본값 사용)
+# 앱에서 참조하는 환경 변수 이름 (필요 시 추가)
 ENV_KEYS=(
   ENVIRONMENT
   APP_NAME
@@ -23,13 +22,8 @@ ENV_KEYS=(
   LOKI_URL
   PROMETHEUS_PUSHGATEWAY_URL
   PROMETHEUS_PUSH_INTERVAL_SECONDS
-  LOG_TIMEZONE
-  LOG_DIR
-  NODE_NAME
   NHN_STORAGE_IAM_USER
   NHN_STORAGE_IAM_PASSWORD
-  NHN_STORAGE_USERNAME
-  NHN_STORAGE_PASSWORD
   NHN_STORAGE_PROJECT_ID
   NHN_STORAGE_TENANT_ID
   NHN_STORAGE_AUTH_URL
@@ -40,70 +34,55 @@ ENV_KEYS=(
   NHN_S3_ENDPOINT_URL
   NHN_S3_REGION_NAME
   NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS
-  NHN_STORAGE_TEMP_URL_KEY
   NHN_CDN_DOMAIN
   NHN_CDN_APP_KEY
+  NHN_CDN_AUTH_KEY
+  NHN_OBJECT_STORAGE_ENDPOINT
+  NHN_OBJECT_STORAGE_ACCESS_KEY
+  NHN_OBJECT_STORAGE_SECRET_KEY
+  NHN_STORAGE_TEMP_URL_KEY
   NHN_CDN_SECRET_KEY
   NHN_CDN_ENCRYPT_KEY
 )
 
-# 기본값 상수 (계정/비밀은 비움)
-DEFAULT_ENVIRONMENT=""
-DEFAULT_APP_NAME="Photo API"
-DEFAULT_APP_VERSION="1.0.0"
-DEFAULT_DEBUG="false"
-DEFAULT_JWT_ALGORITHM="HS256"
-DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES="30"
-DEFAULT_PROMETHEUS_PUSH_INTERVAL_SECONDS="30"
-DEFAULT_LOG_TIMEZONE="Asia/Seoul"
-DEFAULT_NHN_STORAGE_AUTH_URL="https://api-identity-infrastructure.nhncloudservice.com/v2.0"
-DEFAULT_NHN_STORAGE_CONTAINER="photo-container"
-DEFAULT_NHN_STORAGE_URL="https://api-storage.nhncloudservice.com/v1"
-DEFAULT_NHN_S3_ENDPOINT_URL="https://kr1-api-object-storage.nhncloudservice.com"
-DEFAULT_NHN_S3_REGION_NAME="kr1"
-DEFAULT_NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS="3600"
-
-# 필요한 환경 변수 export (주입 값 우선, 없으면 기본값, 계정/비밀은 빈 문자열)
-export ENVIRONMENT="${ENVIRONMENT:-$DEFAULT_ENVIRONMENT}"
-export APP_NAME="${APP_NAME:-$DEFAULT_APP_NAME}"
-export APP_VERSION="${APP_VERSION:-$DEFAULT_APP_VERSION}"
-export DEBUG="${DEBUG:-$DEFAULT_DEBUG}"
-export DATABASE_URL="${DATABASE_URL:-}"
-export JWT_SECRET_KEY="${JWT_SECRET_KEY:-}"
-export JWT_ALGORITHM="${JWT_ALGORITHM:-$DEFAULT_JWT_ALGORITHM}"
-export ACCESS_TOKEN_EXPIRE_MINUTES="${ACCESS_TOKEN_EXPIRE_MINUTES:-$DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES}"
-export INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}' || echo '')}"
-export LOKI_URL="${LOKI_URL:-$LOKI_URL_DEFAULT}"
-export PROMETHEUS_PUSHGATEWAY_URL="${PROMETHEUS_PUSHGATEWAY_URL:-}"
-export PROMETHEUS_PUSH_INTERVAL_SECONDS="${PROMETHEUS_PUSH_INTERVAL_SECONDS:-$DEFAULT_PROMETHEUS_PUSH_INTERVAL_SECONDS}"
-export LOG_TIMEZONE="${LOG_TIMEZONE:-$DEFAULT_LOG_TIMEZONE}"
-export LOG_DIR="${LOG_DIR:-}"
-export NODE_NAME="${NODE_NAME:-}"
-export NHN_STORAGE_IAM_USER="${NHN_STORAGE_IAM_USER:-}"
-export NHN_STORAGE_IAM_PASSWORD="${NHN_STORAGE_IAM_PASSWORD:-}"
-export NHN_STORAGE_USERNAME="${NHN_STORAGE_USERNAME:-}"
-export NHN_STORAGE_PASSWORD="${NHN_STORAGE_PASSWORD:-}"
-export NHN_STORAGE_PROJECT_ID="${NHN_STORAGE_PROJECT_ID:-}"
-export NHN_STORAGE_TENANT_ID="${NHN_STORAGE_TENANT_ID:-}"
-export NHN_STORAGE_AUTH_URL="${NHN_STORAGE_AUTH_URL:-$DEFAULT_NHN_STORAGE_AUTH_URL}"
-export NHN_STORAGE_CONTAINER="${NHN_STORAGE_CONTAINER:-$DEFAULT_NHN_STORAGE_CONTAINER}"
-export NHN_STORAGE_URL="${NHN_STORAGE_URL:-$DEFAULT_NHN_STORAGE_URL}"
-export NHN_S3_ACCESS_KEY="${NHN_S3_ACCESS_KEY:-}"
-export NHN_S3_SECRET_KEY="${NHN_S3_SECRET_KEY:-}"
-export NHN_S3_ENDPOINT_URL="${NHN_S3_ENDPOINT_URL:-$DEFAULT_NHN_S3_ENDPOINT_URL}"
-export NHN_S3_REGION_NAME="${NHN_S3_REGION_NAME:-$DEFAULT_NHN_S3_REGION_NAME}"
-export NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS="${NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS:-$DEFAULT_NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS}"
-export NHN_STORAGE_TEMP_URL_KEY="${NHN_STORAGE_TEMP_URL_KEY:-}"
-export NHN_CDN_DOMAIN="${NHN_CDN_DOMAIN:-}"
-export NHN_CDN_APP_KEY="${NHN_CDN_APP_KEY:-}"
-export NHN_CDN_SECRET_KEY="${NHN_CDN_SECRET_KEY:-}"
-# 호환: 예전 이름 NHN_CDN_AUTH_KEY → NHN_CDN_ENCRYPT_KEY (app은 SECRET_KEY/ENCRYPT_KEY 사용)
-export NHN_CDN_ENCRYPT_KEY="${NHN_CDN_ENCRYPT_KEY:-${NHN_CDN_AUTH_KEY:-}}"
+# 필요한 환경 변수 export (NHN Deploy에서 주입한 값이 있으면 사용)
+export ENVIRONMENT="${ENVIRONMENT:-PRODUCTION}"
+export APP_NAME="${APP_NAME:-kr1-api}"
+export APP_VERSION="${APP_VERSION:-1.0.0}"
+export DEBUG="${DEBUG:-true}"
+export DATABASE_URL="${DATABASE_URL:-mysql+asyncmy://nhn-intern:intern%211@192.168.3.63:13306/photo_api}"
+export JWT_SECRET_KEY="${JWT_SECRET_KEY:-secret-jwt}"
+export JWT_ALGORITHM="${JWT_ALGORITHM:-HS256}"
+export ACCESS_TOKEN_EXPIRE_MINUTES="${ACCESS_TOKEN_EXPIRE_MINUTES:-30}"
+export INSTANCE_IP="${INSTANCE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+export LOKI_URL="${LOKI_URL:-http://192.168.4.73:3100}"
+export PROMETHEUS_PUSHGATEWAY_URL="${PROMETHEUS_PUSHGATEWAY_URL:-http://192.168.4.73:9091}"
+export PROMETHEUS_PUSH_INTERVAL_SECONDS="${PROMETHEUS_PUSH_INTERVAL_SECONDS:-30}"
+export NHN_STORAGE_IAM_USER="${NHN_STORAGE_IAM_USER:-sookju@nhn.com}"
+export NHN_STORAGE_IAM_PASSWORD="${NHN_STORAGE_IAM_PASSWORD:-ugo!girl113!}"
+export NHN_STORAGE_PROJECT_ID="${NHN_STORAGE_PROJECT_ID:-nCZNJgGY}"
+export NHN_STORAGE_TENANT_ID="${NHN_STORAGE_TENANT_ID:-5883ff5244d6421e964eb56f20f93e76}"
+export NHN_STORAGE_AUTH_URL="${NHN_STORAGE_AUTH_URL:-https://api-identity-infrastructure.nhncloudservice.com/v2.0}"
+export NHN_STORAGE_CONTAINER="${NHN_STORAGE_CONTAINER:-photo}"
+export NHN_STORAGE_URL="${NHN_STORAGE_URL:-https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_5883ff5244d6421e964eb56f20f93e76/photo}"
+export NHN_S3_ACCESS_KEY="${NHN_S3_ACCESS_KEY:-5447d231761b447a845140a64ae98852}"
+export NHN_S3_SECRET_KEY="${NHN_S3_SECRET_KEY:-2f67714f8d3547b1a960a38501fc56ae}"
+export NHN_S3_ENDPOINT_URL="${NHN_S3_ENDPOINT_URL:-https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_5883ff5244d6421e964eb56f20f93e76/photo}"
+export NHN_S3_REGION_NAME="${NHN_S3_REGION_NAME:-kr1}"
+export NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS="${NHN_S3_PRESIGNED_URL_EXPIRE_SECONDS:-3600}"
+export NHN_CDN_DOMAIN="${NHN_CDN_DOMAIN:-rlbyozuin.toastcdn.net}"
+export NHN_CDN_APP_KEY="${NHN_CDN_APP_KEY:-FIv6zNJWGTYHFVCm}"
+export NHN_CDN_AUTH_KEY="${NHN_CDN_AUTH_KEY:-btj8ojjsIvMrkaWpaJA62vpuoEMKPXui}"
+export NHN_OBJECT_STORAGE_ENDPOINT="${NHN_OBJECT_STORAGE_ENDPOINT:-https://kr1-api-object-storage.nhncloudservice.com/v1/AUTH_5883ff5244d6421e964eb56f20f93e76/photo}"
+export NHN_OBJECT_STORAGE_ACCESS_KEY="${NHN_OBJECT_STORAGE_ACCESS_KEY:-5447d231761b447a845140a64ae98852}"
+export NHN_OBJECT_STORAGE_SECRET_KEY="${NHN_OBJECT_STORAGE_SECRET_KEY:-2f67714f8d3547b1a960a38501fc56ae}"
+export NHN_STORAGE_TEMP_URL_KEY="${NHN_STORAGE_TEMP_URL_KEY:-do113!dong72gru}"
+export NHN_CDN_ENCRYPT_KEY="${NHN_CDN_ENCRYPT_KEY:-btj8ojjsIvMrkaWpaJA62vpuoEMKPXui}"
+export NHN_CDN_SECRET_KEY="${NHN_CDN_SECRET_KEY:-btj8ojjsIvMrkaWpaJA62vpuoEMKPXui}"
 
 usage() {
   echo "Usage: export VAR=value ... && $0"
-  echo "       $0 --stdin        # read .env content from stdin (전체 내용 덮어씀)"
-  echo "       $0 --restart-only # .env 건드리지 않고 서비스만 재시작"
+  echo "       $0 --stdin   # read .env content from stdin"
   exit 0
 }
 
@@ -111,28 +90,14 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
 fi
 
-if [[ "${1:-}" == "--restart-only" ]]; then
-  echo "Restart only (no .env write)"
-elif [[ "${1:-}" == "--stdin" ]]; then
+if [[ "${1:-}" == "--stdin" ]]; then
   sudo tee "$ENV_FILE" > /dev/null
   echo "Written .env from stdin to $ENV_FILE"
 else
-  # 현재 셸의 export 값 우선, 비어 있으면 기존 .env 값 유지 (배포 시 일부 변수만 넘겨도 나머지가 지워지지 않음)
+  # 현재 셸에서 export 된 환경 변수 중 앱 관련만 골라 .env에 씀
   tmp=$(mktemp)
   for key in "${ENV_KEYS[@]}"; do
     val="${!key:-}"
-    if [[ -z "$val" ]] && [[ -f "$ENV_FILE" ]]; then
-      line=$(sudo grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | head -1) || true
-      if [[ -n "$line" ]]; then
-        val="${line#*=}"
-        val="${val#\"}"; val="${val%\"}"
-        val="${val//\\\"/\"}"
-      fi
-    fi
-    # LOKI_URL이 여전히 비어 있으면 기본값 (기존 .env에 LOKI_URL="" 있으면 병합 후에도 비어 있음)
-    if [[ "$key" == "LOKI_URL" ]] && [[ -z "$val" ]]; then
-      val="$LOKI_URL_DEFAULT"
-    fi
     if [[ -n "$val" ]]; then
       val_escaped="${val//$'\n'/ }"
       val_escaped="${val_escaped//\"/\\\"}"
@@ -159,3 +124,7 @@ if systemctl list-unit-files --full promtail.service 2>/dev/null | grep -q promt
   sudo systemctl restart promtail
   echo "Restarted promtail (LOKI_URL/INSTANCE_IP 반영)"
 fi
+
+journalctl -u promtail --no-pager -n 20 || true
+sudo grep -E "^(LOKI_URL|NHN_CDN)" "$ENV_FILE" 2>/dev/null || true
+systemctl status promtail --no-pager || true

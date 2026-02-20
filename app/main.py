@@ -29,6 +29,7 @@ from app.utils.prometheus_metrics import (
     setup_prometheus,
     pushgateway_loop,
     in_flight_requests,
+    business_metrics_loop,
 )
 from app.middlewares.rate_limit_middleware import setup_rate_limit_exception_handler
 from app.middlewares.request_tracking_middleware import RequestTrackingMiddleware
@@ -49,9 +50,6 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan: startup / shutdown."""
-    # Startup
-    ready.set(1)
-    
     # 설정 검증 (프로덕션 환경에서만)
     try:
         await validate_configuration()
@@ -74,11 +72,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         environment=settings.environment.value,
     )
     await init_db()
+    ready.set(1)  # Health check 통과: 설정 검증·DB 초기화 완료 후
     logger_service = get_logger_service()
     await logger_service.start()
 
     # Pushgateway 연동: PROMETHEUS_PUSHGATEWAY_URL 설정 시 백그라운드에서 주기 푸시
     pushgateway_task = asyncio.create_task(pushgateway_loop())
+    
+    # 비즈니스 메트릭 수집: 주기적으로 DB에서 집계하여 메트릭 업데이트
+    business_metrics_task = asyncio.create_task(business_metrics_loop())
 
     yield
 
@@ -112,8 +114,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             )
     
     pushgateway_task.cancel()
+    business_metrics_task.cancel()
     try:
         await pushgateway_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await business_metrics_task
     except asyncio.CancelledError:
         pass
 

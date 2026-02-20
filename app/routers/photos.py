@@ -34,6 +34,10 @@ from app.utils.prometheus_metrics import (
     photo_upload_file_size_bytes,
     presigned_url_generation_total,
     photo_upload_confirm_total,
+    object_storage_usage_bytes,
+    object_storage_usage_by_user_bytes,
+    photo_upload_size_total,
+    photos_total,
 )
 import time
 
@@ -260,6 +264,12 @@ async def confirm_photo_upload(
         photo_upload_confirm_total.labels(result="success").inc()
         photo_upload_total.labels(upload_method="presigned", result="success").inc()
         
+        # 비즈니스 메트릭 실시간 업데이트: Object Storage 사용량, 사진 수
+        object_storage_usage_bytes.inc(photo.file_size)
+        object_storage_usage_by_user_bytes.labels(user_id=str(current_user.id)).inc(photo.file_size)
+        photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+        photos_total.inc()
+        
         # Generate CDN URL for the uploaded photo
         photo_with_url = await photo_service.get_photo_with_url(photo)
         
@@ -375,6 +385,12 @@ async def upload_photo(
         # 메트릭 수집: 직접 업로드 성공
         photo_upload_total.labels(upload_method="direct", result="success").inc()
         photo_upload_file_size_bytes.labels(upload_method="direct").observe(len(content))
+        
+        # 비즈니스 메트릭 실시간 업데이트: Object Storage 사용량, 사진 수
+        object_storage_usage_bytes.inc(photo.file_size)
+        object_storage_usage_by_user_bytes.labels(user_id=str(current_user.id)).inc(photo.file_size)
+        photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+        photos_total.inc()
         
         # Generate CDN URL for the uploaded photo
         photo_with_url = await photo_service.get_photo_with_url(photo)

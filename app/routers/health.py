@@ -35,7 +35,7 @@ health_check_status = Gauge(
 
 
 @router.get(
-    "/",
+    "",
     summary="Health check (fast)",
 )
 async def health_check() -> Dict[str, Any]:

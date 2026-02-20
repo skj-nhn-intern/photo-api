@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.utils.prometheus_metrics import login_duration_seconds
+from app.utils.prometheus_metrics import login_duration_seconds, users_total
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
 from app.services.auth import AuthService
@@ -45,6 +45,10 @@ async def register(
             event="user_registration",
             user_id=user.id,
         )
+        
+        # 비즈니스 메트릭 실시간 업데이트: 회원수
+        users_total.labels(status="total").inc()
+        users_total.labels(status="active").inc()
         
         return UserResponse.model_validate(user)
     except ValueError as e:
