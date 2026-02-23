@@ -54,8 +54,8 @@
 - **타입**: Histogram
 - **설명**: HTTP 요청 처리 시간 (FastAPI Instrumentator 자동 수집)
 - **버킷**: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0`
-- **라벨**: `method`, `handler`, `status`
-- **구현 방식**: FastAPI Instrumentator가 자동으로 수집
+- **라벨**: `method`, `handler`, `status` — status는 구체 코드 (200, 201, 404, 500 등)
+- **구현 방식**: FastAPI Instrumentator(`should_group_status_codes=False`)가 자동 수집
 - **핵심 모니터링 포인트**:
   - **P50 (중앙값)**: 일반적인 사용자 경험
   - **P95**: 95% 사용자가 경험하는 응답 시간
@@ -69,11 +69,11 @@
 #### `http_requests_total` (FastAPI Instrumentator)
 - **타입**: Counter
 - **설명**: 총 HTTP 요청 수
-- **라벨**: `method`, `handler`, `status`
-- **구현 방식**: FastAPI Instrumentator가 자동으로 수집
+- **라벨**: `method`, `handler`, `status` — **status는 구체 코드** (200, 201, 204, 302, 400, 401, 404, 500, 503 등)
+- **구현 방식**: FastAPI Instrumentator(`should_group_status_codes=False`)가 자동 수집
 - **핵심 모니터링 포인트**:
   - 요청 처리량 (RPS: Requests Per Second)
-  - HTTP 상태 코드별 분포 (2xx, 4xx, 5xx)
+  - HTTP 상태 코드별 분포 (예: 200/201/404/500 단위). 5xx는 `status=~"5.."` 로 집계
   - 엔드포인트별 트래픽 패턴
   - 시간대별 트래픽 분석
 - **알림 기준**:
@@ -134,20 +134,19 @@
 
 #### `photo_api_external_request_duration_seconds`
 - **타입**: Histogram
-- **설명**: 외부 서비스 요청 처리 시간 (Object Storage, CDN, Log Service)
-- **라벨**: `service` (object_storage | cdn | log_service)
+- **설명**: 이 API 서버가 외부(OBS, CDN, Log)로 보낸 요청의 처리 시간
+- **라벨**: `service`, `result` (success | failure) — 성공/실패별 지연 분석 가능
 - **버킷**: `0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0`
 - **구현 방식**: 
   - `record_external_request()` 컨텍스트 매니저 사용
-  - 외부 API 호출 전후 시간 측정
+  - 외부 API 호출 전후 시간 측정, 성공/실패 모두 기록
 - **핵심 모니터링 포인트**:
-  - 외부 의존성 서비스 응답 시간
-  - Object Storage 업로드/다운로드 성능
-  - CDN 토큰 생성 성능
-  - Log Service 전송 성능
+  - 우리→OBS/CDN/Log 구간의 응답 시간 (의존성 관점)
+  - Object Storage 업로드/다운로드, CDN 토큰 생성, Log 전송 지연
+  - 실패 요청의 지연(타임아웃 근접 등) 분석
 - **알림 기준**:
-  - **Warning**: P95 > 2초 지속 5분
-  - **Critical**: P95 > 5초 지속 2분 또는 특정 서비스 완전 실패
+  - **Warning**: P95(success) > 2초 지속 5분
+  - **Critical**: P95(success) > 5초 지속 2분 또는 특정 서비스 완전 실패
 
 ### 2.3 동시성 및 처리량
 
@@ -199,21 +198,37 @@
   - **Warning**: 분당 5회 이상 지속 5분
   - **Critical**: 분당 20회 이상 지속 2분 또는 DB 연결 불가
 
+#### `photo_api_external_request_total`
+- **타입**: Counter
+- **설명**: 외부 API 요청 수 (성공/실패 구분) — 에러율·성공률 계산용
+- **라벨**: `service`, `status` (success | failure)
+- **구현 방식**: 
+  - `record_external_request()` 컨텍스트 매니저에서 성공 시 `status="success"`, 예외 시 `status="failure"` 증가
+- **핵심 모니터링 포인트**:
+  - 서비스별 요청률: `rate(photo_api_external_request_total[5m])`
+  - 실패율: `failure / (success + failure) * 100`
+- **상세·쿼리·알림**: `docs/monitoring/CIRCUIT-BREAKER-AND-EXTERNAL-SERVICE-METRICS.md` 참고
+
 #### `photo_api_external_request_errors_total`
 - **타입**: Counter
 - **설명**: 외부 API 요청 실패 총 수
-- **라벨**: `service` (object_storage | cdn | log_service)
+- **라벨**: `service` (obs_api_server | cdn_api_server | log_api_server — API 서버가 OBS/CDN/Log에 요청할 때의 구간)
 - **구현 방식**: 
   - `record_external_request()` 컨텍스트 매니저에서 예외 발생 시 증가
   - 각 외부 서비스별로 분리하여 수집
 - **핵심 모니터링 포인트**:
-  - 외부 의존성 서비스 상태
-  - Object Storage 장애 (파일 업로드/다운로드 실패)
-  - CDN 장애 (토큰 생성 실패)
-  - Log Service 장애 (로깅 실패)
+  - **이 API 서버에서 OBS/CDN/Log로 보낸 요청**의 성공/실패 (의존성·연동 상태)
+  - 우리 트래픽 기준 업로드/다운로드·토큰 발급·로깅 실패 추이
 - **알림 기준**:
   - **Warning**: 특정 서비스 에러율 > 5% 지속 5분
   - **Critical**: 특정 서비스 에러율 > 20% 지속 2분 또는 완전 실패
+
+**OBS/CDN “상태” 해석의 한계**  
+- API 서버가 OBS/CDN에 요청을 보내서 성공/실패를 보는 것은 **“OBS/CDN 서비스 전체가 살아 있다”를 증명하지 않습니다.**  
+- 측정되는 것은 **“이 API 서버 → OBS/CDN으로의 연동(의존성)이 동작하는지”**입니다.  
+  - 예: 우리 인스턴스→OBS 인증/스토리지 엔드포인트 도달 가능 여부, 우리가 호출한 CDN API 응답 여부.  
+- OBS/CDN **서비스 자체의 전역 상태**를 알려면 해당 업체 상태 페이지 또는 다른 리전/클라이언트 기준 프로브가 필요합니다.  
+- `/health/detailed`의 `obs_api_server` 체크도 **“이 API 서버가 OBS 인증 엔드포인트에 연결할 수 있는지”**만 검사하며, CDN API server(`cdn_api_server`)는 별도 헬스 체크 없이 실제 요청 시 메트릭으로만 파악합니다.
 
 ### 3.2 로깅 시스템 상태
 
@@ -230,6 +245,76 @@
 - **알림 기준**:
   - **Warning**: 큐 크기 > 1000 지속 5분
   - **Critical**: 큐 크기 > 5000 지속 2분 (메모리 부족 위험)
+
+---
+
+### 3.3 Circuit Breaker 상태
+
+#### `photo_api_circuit_breaker_requests_total`
+- **타입**: Counter
+- **설명**: Circuit Breaker를 거친 총 요청 수
+- **라벨**: `service` (대상 서비스 이름), `status` (success | failure | rejected)
+- **구현 방식**: `CircuitBreaker.call` 메서드 실행 결과에 따라 증가
+- **핵심 모니터링 포인트**:
+  - Circuit Breaker 활성화(rejected) 비율 파악
+  - 외부 서비스 연동 성공/실패율 실시간 확인
+- **알림 기준**:
+  - **Warning**: rejected 비율 > 5% 지속 5분
+  - **Critical**: rejected 비율 > 20% 지속 2분
+
+#### `photo_api_circuit_breaker_failures_total`
+- **타입**: Counter
+- **설명**: Circuit Breaker 내부 실행 중 발생한 예외 타입별 에러 수
+- **라벨**: `service`, `exception_type` (발생한 예외의 클래스명)
+- **핵심 모니터링 포인트**:
+  - 어떤 종류의 에러가 발생하는지(Timeout, ConnectionError 등) 상세 분석
+  - 특정 예외 타입의 급증 여부 모니터링
+
+#### `photo_api_circuit_breaker_state_transitions_total`
+- **타입**: Counter
+- **설명**: Circuit Breaker 상태 전환 횟수
+- **라벨**: `service`, `from_state`, `to_state`
+- **핵심 모니터링 포인트**:
+  - 상태 복구(HALF_OPEN -> CLOSED) 및 다시 실패(HALF_OPEN -> OPEN)로 이어지는 플랩(Flapping) 현상 탐지
+- **알림 기준**:
+  - **Warning**: 분당 상태 전환이 5회 이상 발생 지속 5분 (플래핑 의심)
+
+#### `photo_api_circuit_breaker_call_duration_seconds`
+- **타입**: Histogram
+- **설명**: Circuit Breaker를 통한 외부 서비스 요청 처리 시간
+- **라벨**: `service`
+- **버킷**: `0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0`
+- **핵심 모니터링 포인트**:
+  - 외부 서비스 자체의 지연(경고 전, timeout 임박 등) 조기 감지
+  - 응답 시간 P95, P99 모니터링
+
+#### `photo_api_circuit_breaker_state`
+- **타입**: Gauge
+- **설명**: 현재 Circuit Breaker 상태 (0=CLOSED, 1=OPEN, 2=HALF_OPEN)
+- **라벨**: `service`
+- **핵심 모니터링 포인트**:
+  - 특정 시스템의 장애 상태를 직관적으로 확인
+- **알림 기준**:
+  - **Warning**: 1(OPEN) 또는 2(HALF_OPEN) 상태가 지속 1분 이상
+  - **Critical**: 1(OPEN) 상태가 지속 5분 이상
+
+#### `photo_api_circuit_breaker_consecutive_failures`
+- **타입**: Gauge
+- **설명**: 현재 연속 실패 횟수 (성공 또는 상태 전이 시 리셋)
+- **라벨**: `service`
+- **핵심 모니터링 포인트**:
+  - OPEN 직전 임계값 근접도(예: failure_threshold=5일 때 4면 경고)
+  - 디버깅 시 실패 누적 추이 확인
+
+#### `photo_api_circuit_breaker_last_state_change_timestamp_seconds`
+- **타입**: Gauge
+- **설명**: 마지막 상태 전이 시각(Unix timestamp, 초)
+- **라벨**: `service`
+- **핵심 모니터링 포인트**:
+  - OPEN 유지 시간: `time() - photo_api_circuit_breaker_last_state_change_timestamp_seconds` (state==1일 때)
+  - 복구 대기 시간 경과 여부
+
+**Circuit Breaker·외부 서비스 상세(쿼리, 대시보드, 알림 규칙)**: `docs/monitoring/CIRCUIT-BREAKER-AND-EXTERNAL-SERVICE-METRICS.md` 참고.
 
 ---
 
@@ -457,6 +542,8 @@
 
 ## 7. 비즈니스 성장 지표 (Business Growth Metrics)
 
+**전체 도메인별 비즈니스 메트릭 정의·쿼리·대시보드**: `docs/monitoring/BUSINESS-METRICS-BY-DOMAIN.md` 참고.
+
 ### 7.1 서비스 성장 추적
 
 #### `photo_api_users_total`
@@ -591,6 +678,21 @@
 2. **용량 관리**: Object Storage 사용량 급증 시 조기 탐지 및 비용 관리
 3. **이상 탐지**: 특정 사용자의 비정상적 업로드 패턴 탐지
 4. **비즈니스 의사결정**: 서비스 성장 데이터를 바탕으로 기능 개발 우선순위 결정
+
+### 7.4 비즈니스 관점 도메인 메트릭
+
+전체 도메인(사용자·앨범·사진·공유·스토리지)을 비즈니스 KPI 관점에서 정리한 메트릭입니다. 상세 정의·쿼리·대시보드는 `docs/monitoring/BUSINESS-METRICS-BY-DOMAIN.md` 참고.
+
+**주기 집계 Gauge (60초):**
+- `photo_api_business_new_users_24h` / `photo_api_business_new_users_7d`: 신규 가입자 수
+- `photo_api_business_avg_albums_per_user`, `photo_api_business_avg_photos_per_album`, `photo_api_business_avg_photos_per_user`: 사용자/앨범당 평균
+- `photo_api_business_share_rate_percent`: 공유 앨범 비율(%)
+- `photo_api_business_photos_uploaded_24h`, `photo_api_business_share_links_created_24h`: 최근 24h 활동
+- `photo_api_business_total_share_views`: 공유 링크 총 조회수
+
+**이벤트 Counter (요청 시):**
+- `photo_api_user_registration_total` (result: success | failure): 가입 시도·성공률
+- `photo_api_user_login_total` (result: success | failure): 로그인 시도·성공률
 
 ---
 

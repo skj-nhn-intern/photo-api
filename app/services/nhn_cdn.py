@@ -84,7 +84,7 @@ class NHNCDNService:
             headers["Authorization"] = self.settings.nhn_cdn_secret_key
         
         try:
-            async with record_external_request("nhn_cdn"):
+            async with record_external_request("cdn_api_server"):
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, headers=headers)
 
@@ -97,12 +97,12 @@ class NHNCDNService:
                             "CDN auth token failed",
                             extra={"event": "cdn_token", "status": response.status_code},
                         )
-                        external_request_errors_total.labels(service="nhn_cdn").inc()
+                        external_request_errors_total.labels(service="cdn_api_server").inc()
                         return None
 
         except httpx.HTTPError as e:
             logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn_token"})
-            external_request_errors_total.labels(service="nhn_cdn").inc()
+            external_request_errors_total.labels(service="cdn_api_server").inc()
             return None
     
     async def generate_auth_token_url(

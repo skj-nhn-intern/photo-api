@@ -150,7 +150,7 @@ Loki에서 **event 값별 로그 건수**를 보고 싶을 때:
   → 에러율 = 5xx / 전체 * 100. 가용성(%) = (1 - 5xx/전체) * 100.  
 - **정리**: 메트릭이 있으면 메트릭으로 두 지표를 쓰는 것을 권장하고, 로그만 수집하는 환경이면 로그 기반 쿼리로 대체하면 됩니다.
 
-**외부 서비스 라벨 참고**: `photo_api_external_request_errors_total`, `photo_api_external_request_duration_seconds` 의 `service` 라벨은 현재 **`nhn_storage`**, **`nhn_cdn`**, **`nhn_log`** 입니다. 쿼리 시 `{service=~"nhn_storage|nhn_cdn|nhn_log"}` 또는 서비스별로 필터하세요.
+**외부 서비스 라벨 참고**: `photo_api_external_request_errors_total`, `photo_api_external_request_duration_seconds` 의 `service` 라벨은 **`obs_api_server`**(OBS), **`cdn_api_server`**(CDN), **`log_api_server`**(Log) 입니다. 쿼리 시 `{service=~"obs_api_server|cdn_api_server|log_api_server"}` 또는 서비스별로 필터하세요.
 
 ### 3.3 시각화·배치 요약
 
@@ -381,7 +381,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 | `photo_api_health_check_status` | health 라우터 (check_type: fast / detailed) | SLO Overview Row 2 “스택 상태” | 1=통과, 0=실패. 헬스체크 실패 시 원인 범위 좁히기 |
 | `photo_api_db_pool_active_connections` | database.py (연결 풀) | SLO Overview Row 2 또는 별도 “DB 풀” 행 | 풀 사용량. 고갈 전 알림 |
 | `photo_api_db_pool_waiting_requests` | database.py (overflow) | 동일 | 대기 요청 증가 시 스케일·풀 크기 검토 |
-| `photo_api_circuit_breaker_state` | circuit_breaker.py (service별) | SLO Overview 또는 “외부 의존성” 행 | 0=closed, 1=open, 2=half-open. nhn_storage/nhn_cdn 등 |
+| `photo_api_circuit_breaker_state` | circuit_breaker.py (service별) | SLO Overview 또는 “외부 의존성” 행 | 0=closed, 1=open, 2=half-open. obs_api_server/cdn_api_server 등 |
 | `photo_api_in_flight_requests` | RequestTrackingMiddleware | SLO Overview “처리 중 요청 수” | Graceful shutdown·부하 판단 보조 |
 
 위 메트릭은 **이미 코드에 있으므로** Prometheus 스크래핑만 하면 되고, 대시보드에 패널만 추가하면 됩니다.
@@ -394,7 +394,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 | **이미지 접근(access_type=shared)** | `photo_api_image_access_total` 은 인증(authenticated)만 기록. 공유 이미지는 `share_link_image_access_total` 만 있음 | `/share/{token}/photos/{id}/image` 처리 시 `image_access_total.labels(access_type="shared", result=...)` 추가 | SLO Overview “이미지 접근 성공률”을 인증+공유 통합 또는 Share 전용으로 일관되게 표시 |
 | **회원가입 전용 메트릭** | 회원가입 성공/실패는 `http_requests_total{handler=~".*register"}` 로만 구분 가능 | (선택) `photo_api_register_total` Counter (result: success/failure) 추가 | User 대시보드에서 “회원가입 성공률” Stat을 Instrumentator 의존 없이 안정적으로 표시 |
 | **Nginx 메트릭** | 문서에서 가정만 함. 실제로 stub_status 또는 로그 기반 수집이 없을 수 있음 | Nginx 앞단 사용 시: nginx-prometheus-exporter(stub_status) 또는 access log 파싱(경로별·상태별·upstream_response_time) 도입 | SLO Overview·서비스별에서 Nginx RPS·연결 수·(가능 시) 경로별 에러율·지연 표시 |
-| **외부 서비스 라벨 통일** | `nhn_storage`, `nhn_cdn`, `nhn_log` 사용 중. 문서/알림에서 `object_storage`, `cdn` 등으로 혼용 가능 | 대시보드·알림 쿼리는 실제 라벨(`nhn_storage` 등) 사용. 필요 시 주석 또는 문서에 “nhn_storage = Object Storage” 매핑 명시 | 쿼리 오류 방지, 유지보수 일관성 |
+| **외부 서비스 라벨** | `obs_api_server`, `cdn_api_server`, `log_api_server` (API 서버→OBS/CDN/Log 구간) | 대시보드·알림 쿼리에서 동일 라벨 사용. | 쿼리 오류 방지, 의미 명확화 |
 | **HTTP handler 라벨** | Instrumentator가 노출하는 `handler` 값(경로)이 앱 라우팅에 따라 다름(예: `/auth/login` vs `/api/auth/login`) | Grafana 변수 또는 쿼리에서 실제 노출된 `handler` 값 확인 후 `handler=~".*login"` 등으로 매칭 | prefix가 `/api` 인 경우 `handler=~"/api/auth.*"` 등으로 조정 |
 
 ### 9.3 알림·검증 보완
@@ -403,7 +403,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 |------|------|
 | **헬스체크 실패 알림** | `photo_api_health_check_status == 0` (check_type별) 일정 시간 지속 시 알림. 상세(detailed) 실패 시 DB·스토리지 등 의존성 점검 |
 | **DB 풀 고갈 전 알림** | `photo_api_db_pool_waiting_requests` > 0 지속 또는 `photo_api_db_pool_active_connections` 가 풀 max에 근접 시 Warning |
-| **Circuit breaker open 알림** | `photo_api_circuit_breaker_state{service=~"nhn_storage|nhn_cdn|nhn_log"} == 1` 일정 시간 지속 시 해당 외부 서비스 장애로 알림 |
+| **Circuit breaker open 알림** | `photo_api_circuit_breaker_state{service=~"obs_api_server|cdn_api_server|log_api_server"} == 1` 일정 시간 지속 시 해당 API 서버 의존성 장애로 알림 |
 
 이 반영 시 대시보드에 “넣을 메트릭”이 더 구체적으로 정해지고, 장애 시나리오별로 필요한 지표를 서버에서 빠짐없이 쓸 수 있습니다.
 
@@ -458,7 +458,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 
 | 시나리오 | 현상 | 필요한 메트릭 | 왜 필요한지 | 참고 대시보드 |
 |----------|------|----------------|-------------|----------------|
-| Object Storage 장애 | 업로드 실패, 이미지 스트리밍 실패 | `photo_api_external_request_errors_total{service="object_storage"}`, `photo_api_photo_upload_confirm_total`, `photo_api_image_access_total` | 외부 에러 카운트로 “스토리지 문제” 판단. 업로드 확인·이미지 접근 실패와 시간대 맞추면 원인 확정에 가까움. | Image, SLO Overview |
+| Object Storage 장애 | 업로드 실패, 이미지 스트리밍 실패 | `photo_api_external_request_errors_total{service="obs_api_server"}`, `photo_api_photo_upload_confirm_total`, `photo_api_image_access_total` | 외부 에러 카운트로 “스토리지 문제” 판단. 업로드 확인·이미지 접근 실패와 시간대 맞추면 원인 확정에 가까움. | Image, SLO Overview |
 | CDN 장애 | 토큰 발급 실패, 이미지 리다이렉트 실패 | `photo_api_external_request_errors_total{service="cdn"}`, `photo_api_image_access_duration_seconds` | CDN 에러 증가 시 이미지 로딩이 백엔드 스트리밍으로 넘어가거나 실패. 지연·실패율 동시 확인. | Image, SLO Overview |
 | Log Service 장애 | 로그 적재 지연·실패 | `photo_api_log_queue_size`, `photo_api_external_request_errors_total{service="log_service"}` | 로그 큐가 계속 쌓이면 Log 전송 실패. 큐 크기로 백프레셔·메모리 위험 감지. | SLO Overview (안정성 행) |
 
@@ -488,7 +488,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 | 시나리오 | 현상 | 필요한 메트릭 | 왜 필요한지 | 참고 대시보드 |
 |----------|------|----------------|-------------|----------------|
 | Presigned URL 발급 실패 | 클라이언트가 업로드 시작도 못 함 | `photo_api_presigned_url_generation_total` (result별) | failure 급증 시 “업로드 진입” 단계에서 막힘. IAM·스토리지 설정·앱 로직 점검. | Image |
-| 업로드 완료 확인 실패 | 클라이언트는 업로드했는데 서버에 반영 안 됨 | `photo_api_photo_upload_confirm_total` (result별), `photo_api_external_request_errors_total{service="object_storage"}` | confirm failure = 실제 저장·메타 반영 실패. 스토리지 에러와 함께 보면 원인(스토리지/네트워크/타임아웃) 구분. | Image |
+| 업로드 완료 확인 실패 | 클라이언트는 업로드했는데 서버에 반영 안 됨 | `photo_api_photo_upload_confirm_total` (result별), `photo_api_external_request_errors_total{service="obs_api_server"}` | confirm failure = 실제 저장·메타 반영 실패. 스토리지 에러와 함께 보면 원인(스토리지/네트워크/타임아웃) 구분. | Image |
 | 업로드 전체 실패율 상승 | presigned/direct 모두 실패 증가 | `photo_api_photo_upload_total` (upload_method, result) | presigned vs direct 둘 다 나쁘면 공통 원인(스토리지·네트워크·앱). 한쪽만 나쁘면 해당 경로만 점검. | Image |
 
 ---
@@ -498,7 +498,7 @@ Loki에서 `count_over_time(...)` 같은 쿼리는 **메트릭**(시간+값)만 
 | 시나리오 | 현상 | 필요한 메트릭 | 왜 필요한지 | 참고 대시보드 |
 |----------|------|----------------|-------------|----------------|
 | 이미지 접근 실패(권한·없음) | 403/404, denied 증가 | `photo_api_image_access_total` (result=denied vs success) | denied 비율로 “권한 거부·리소스 없음” 규모 파악. 정책·클라이언트 버그 구분. | Image |
-| 이미지 로딩 지연 | 스피너 길어짐, P95 상승 | `photo_api_image_access_duration_seconds`, `photo_api_external_request_duration_seconds{service="object_storage"}` | 이미지 지연이 스토리지 지연과 같이 올라가면 스토리지/네트워크. CDN 사용 시 리다이렉트만 느리면 CDN·토큰 발급 확인. | Image |
+| 이미지 로딩 지연 | 스피너 길어짐, P95 상승 | `photo_api_image_access_duration_seconds`, `photo_api_external_request_duration_seconds{service="obs_api_server"}` | 이미지 지연이 스토리지 지연과 같이 올라가면 스토리지/네트워크. CDN 사용 시 리다이렉트만 느리면 CDN·토큰 발급 확인. | Image |
 | CDN 장애로 백엔드 쏠림 | 이미지 전부 백엔드 경유, 지연·부하 증가 | `photo_api_image_access_duration_seconds`, `photo_api_external_request_errors_total{service="cdn"}`, 이미지 접근 건수 | CDN 에러 증가 + 이미지 접근 지연·건수 동시 확인. CDN 복구 또는 임시로 백엔드만 사용 시 리소스 모니터링. | Image, SLO Overview |
 
 ---

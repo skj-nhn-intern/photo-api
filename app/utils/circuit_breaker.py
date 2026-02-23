@@ -12,7 +12,14 @@ import time
 from enum import Enum
 from typing import Callable, TypeVar, Optional
 
-from app.utils.prometheus_metrics import REGISTRY, Gauge
+from app.utils.prometheus_metrics import (
+    REGISTRY,
+    Gauge,
+    circuit_breaker_requests_total,
+    circuit_breaker_failures_total,
+    circuit_breaker_state_transitions_total,
+    circuit_breaker_call_duration_seconds,
+)
 
 logger = logging.getLogger("app.circuit_breaker")
 
@@ -20,6 +27,22 @@ logger = logging.getLogger("app.circuit_breaker")
 circuit_breaker_state = Gauge(
     "photo_api_circuit_breaker_state",
     "Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
+    ["service"],
+    registry=REGISTRY,
+)
+
+# 현재 연속 실패 횟수 (OPEN 직전 임계값 근접도·디버깅용)
+circuit_breaker_consecutive_failures = Gauge(
+    "photo_api_circuit_breaker_consecutive_failures",
+    "Current consecutive failure count (resets on success or state transition)",
+    ["service"],
+    registry=REGISTRY,
+)
+
+# 마지막 상태 전이 시각 (Unix timestamp, 초 단위) — OPEN 유지 시간 등 계산용
+circuit_breaker_last_state_change_timestamp_seconds = Gauge(
+    "photo_api_circuit_breaker_last_state_change_timestamp_seconds",
+    "Unix timestamp of last circuit breaker state transition",
     ["service"],
     registry=REGISTRY,
 )
@@ -39,7 +62,7 @@ class CircuitBreaker:
     Circuit Breaker 구현.
     
     사용 예시:
-        breaker = CircuitBreaker("nhn_storage", failure_threshold=5, timeout=60)
+        breaker = CircuitBreaker("obs_api_server", failure_threshold=5, timeout=60)
         
         async def call_service():
             return await breaker.call(service_function, *args, **kwargs)
@@ -74,6 +97,10 @@ class CircuitBreaker:
         
         # 초기 상태 메트릭 설정
         circuit_breaker_state.labels(service=service_name).set(0)
+        circuit_breaker_consecutive_failures.labels(service=service_name).set(0)
+        circuit_breaker_last_state_change_timestamp_seconds.labels(service=service_name).set(
+            time.time()
+        )
     
     async def call(self, func: Callable[..., T], *args, **kwargs) -> T:
         """
@@ -96,6 +123,9 @@ class CircuitBreaker:
             
             # OPEN 상태면 즉시 실패
             if self.state == CircuitState.OPEN:
+                circuit_breaker_requests_total.labels(
+                    service=self.service_name, status="rejected"
+                ).inc()
                 logger.warning(
                     f"Circuit breaker OPEN for {self.service_name}, request rejected",
                     extra={"event": "circuit_breaker", "service": self.service_name},
@@ -105,6 +135,7 @@ class CircuitBreaker:
                 )
         
         # HALF_OPEN 또는 CLOSED 상태에서 요청 실행
+        start_time = time.perf_counter()
         try:
             # async 함수인지 확인
             if asyncio.iscoroutinefunction(func):
@@ -116,12 +147,27 @@ class CircuitBreaker:
             async with self._lock:
                 await self._on_success()
             
+            circuit_breaker_requests_total.labels(
+                service=self.service_name, status="success"
+            ).inc()
+            circuit_breaker_call_duration_seconds.labels(
+                service=self.service_name
+            ).observe(time.perf_counter() - start_time)
+            
             return result
             
         except Exception as e:
             # 실패 처리
             async with self._lock:
-                await self._on_failure()
+                await self._on_failure(e)
+            
+            circuit_breaker_requests_total.labels(
+                service=self.service_name, status="failure"
+            ).inc()
+            circuit_breaker_call_duration_seconds.labels(
+                service=self.service_name
+            ).observe(time.perf_counter() - start_time)
+            
             raise
     
     async def _check_and_transition(self) -> None:
@@ -133,10 +179,17 @@ class CircuitBreaker:
                 and time.time() - self.last_failure_time >= self.timeout
             ):
                 # HALF_OPEN으로 전이
+                circuit_breaker_state_transitions_total.labels(
+                    service=self.service_name, from_state=CircuitState.OPEN.value, to_state=CircuitState.HALF_OPEN.value
+                ).inc()
                 self.state = CircuitState.HALF_OPEN
                 self.success_count = 0
                 self.failure_count = 0
                 circuit_breaker_state.labels(service=self.service_name).set(2)
+                circuit_breaker_consecutive_failures.labels(service=self.service_name).set(0)
+                circuit_breaker_last_state_change_timestamp_seconds.labels(service=self.service_name).set(
+                    time.time()
+                )
                 logger.info(
                     f"Circuit breaker transitioning to HALF_OPEN for {self.service_name}",
                     extra={"event": "circuit_breaker", "service": self.service_name},
@@ -148,10 +201,17 @@ class CircuitBreaker:
             self.success_count += 1
             if self.success_count >= self.success_threshold:
                 # CLOSED로 전이
+                circuit_breaker_state_transitions_total.labels(
+                    service=self.service_name, from_state=CircuitState.HALF_OPEN.value, to_state=CircuitState.CLOSED.value
+                ).inc()
                 self.state = CircuitState.CLOSED
                 self.failure_count = 0
                 self.success_count = 0
                 circuit_breaker_state.labels(service=self.service_name).set(0)
+                circuit_breaker_consecutive_failures.labels(service=self.service_name).set(0)
+                circuit_breaker_last_state_change_timestamp_seconds.labels(service=self.service_name).set(
+                    time.time()
+                )
                 logger.info(
                     f"Circuit breaker CLOSED for {self.service_name}",
                     extra={"event": "circuit_breaker", "service": self.service_name},
@@ -159,16 +219,34 @@ class CircuitBreaker:
         elif self.state == CircuitState.CLOSED:
             # CLOSED 상태에서는 실패 카운트 리셋
             self.failure_count = 0
+            circuit_breaker_consecutive_failures.labels(service=self.service_name).set(0)
     
-    async def _on_failure(self) -> None:
-        """실패 처리."""
+    async def _on_failure(self, exception: Exception) -> None:
+        """실패 처리.
+        
+        Args:
+            exception: 발생한 예외 객체
+        """
         self.failure_count += 1
         self.last_failure_time = time.time()
         
+        exception_type = type(exception).__name__
+        circuit_breaker_failures_total.labels(
+            service=self.service_name, exception_type=exception_type
+        ).inc()
+        
+        circuit_breaker_consecutive_failures.labels(service=self.service_name).set(self.failure_count)
+
         if self.state == CircuitState.HALF_OPEN:
             # HALF_OPEN에서 실패하면 즉시 OPEN으로
+            circuit_breaker_state_transitions_total.labels(
+                service=self.service_name, from_state=CircuitState.HALF_OPEN.value, to_state=CircuitState.OPEN.value
+            ).inc()
             self.state = CircuitState.OPEN
             circuit_breaker_state.labels(service=self.service_name).set(1)
+            circuit_breaker_last_state_change_timestamp_seconds.labels(service=self.service_name).set(
+                time.time()
+            )
             logger.warning(
                 f"Circuit breaker OPEN for {self.service_name} (failed in HALF_OPEN)",
                 extra={"event": "circuit_breaker", "service": self.service_name},
@@ -176,8 +254,14 @@ class CircuitBreaker:
         elif self.state == CircuitState.CLOSED:
             # CLOSED에서 실패 횟수 확인
             if self.failure_count >= self.failure_threshold:
+                circuit_breaker_state_transitions_total.labels(
+                    service=self.service_name, from_state=CircuitState.CLOSED.value, to_state=CircuitState.OPEN.value
+                ).inc()
                 self.state = CircuitState.OPEN
                 circuit_breaker_state.labels(service=self.service_name).set(1)
+                circuit_breaker_last_state_change_timestamp_seconds.labels(service=self.service_name).set(
+                    time.time()
+                )
                 logger.warning(
                     f"Circuit breaker OPEN for {self.service_name} "
                     f"(failure_count={self.failure_count})",

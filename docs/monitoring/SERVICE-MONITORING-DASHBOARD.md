@@ -39,7 +39,7 @@
 | `photo_api_login_duration_seconds` | Histogram | 메트릭 (앱) | Time series | 시간 / 초(sec) | 로그인 지연. 인증 경험·DB/해싱 병목·공격 시 지연 이상 탐지. |
 | `photo_api_image_access_duration_seconds` | Histogram | 메트릭 (앱) | Time series | 시간 / 초(sec) | 이미지 로딩 성능. CDN vs 백엔드 효과·SLA(예: P95 &lt; 2초) 확인. |
 | `photo_api_share_link_access_duration_seconds` | Histogram | 메트릭 (앱) | Time series | 시간 / 초(sec) | 공유 링크 페이지 접근 지연. 토큰 검증·DB 쿼리 성능 점검. |
-| `photo_api_external_request_duration_seconds` | Histogram | 메트릭 (앱) | Time series | 시간 / 초(sec) | Object Storage·CDN·Log 등 외부 의존성 지연. 장애 시 원인 범위 좁히기. |
+| `photo_api_external_request_duration_seconds` | Histogram | 메트릭 (앱) | Time series (서비스·result별) | 시간 / 초(sec) | Object Storage·CDN·Log 등 외부 의존성 지연. result=success\|failure 로 성공/실패별 P95 분석. |
 | `photo_api_active_sessions` | Gauge | 메트릭 (앱) | Time series, Stat | 시간 / 동시 세션 수 | 동시 부하. 스케일·리소스 계획·과부하 전 알림. |
 
 **시각화 상세 (성능)**  
@@ -55,8 +55,11 @@
 | `http_requests_total{status=~"5.."}` | Counter | 메트릭 (Instrumentator) | Time series, Stat | 시간 / 건·초당 또는 비율(%) | 5xx 에러율. SLA·장애 감지 및 알림. |
 | `photo_api_exceptions_total` | Counter | 메트릭 (앱) | Time series | 시간 / 건·분당 | 미처리 예외. 버그·환경 이슈 조기 발견. |
 | `photo_api_db_errors_total` | Counter | 메트릭 (앱) | Time series | 시간 / 건·분당 | DB 연결·트랜잭션 실패. 연결 풀·DB 장애 대응. |
+| `photo_api_external_request_total` | Counter | 메트릭 (앱) | Time series (서비스·status별) | 시간 / 건·분당 | 외부 요청 수(성공/실패). 에러율·성공률 계산용. |
 | `photo_api_external_request_errors_total` | Counter | 메트릭 (앱) | Time series (서비스별) | 시간 / 건·분당 | 외부 API 실패. Object Storage·CDN·Log 장애 구분. |
 | `photo_api_log_queue_size` | Gauge | 메트릭 (앱, Custom Collector) | Time series, Stat | 시간 / 큐 길이(건) | 로그 백프레셔. 큐 폭주 시 메모리·로그 유실 방지. |
+
+**Circuit Breaker 메트릭** (`photo_api_circuit_breaker_*`): 상태(state), 연속 실패 수(consecutive_failures), 마지막 전이 시각(last_state_change_timestamp), 요청 수(success/failure/rejected), 상태 전이 횟수, 호출 지연. 상세·쿼리·알림은 `docs/monitoring/CIRCUIT-BREAKER-AND-EXTERNAL-SERVICE-METRICS.md` 참고.
 
 **로그 보완**: 예외·DB/외부 에러 발생 시 로그에서 스택 트레이스·요청 ID로 원인 추적.
 
@@ -214,6 +217,8 @@ SLA 대시보드는 **약속한 목표**와 **실제 수치**를 한 화면에�
 ## 11. 관련 문서
 
 - **지표 정의·알림 상세**: `HA_MONITORING_METRICS.md`
+- **비즈니스 관점 도메인 메트릭(전체 도메인·KPI·대시보드)**: `docs/monitoring/BUSINESS-METRICS-BY-DOMAIN.md`
+- **Circuit Breaker·외부 서비스 메트릭(쿼리·대시보드·알림)**: `docs/monitoring/CIRCUIT-BREAKER-AND-EXTERNAL-SERVICE-METRICS.md`
 - **Grafana 패널·쿼리·SLA 대시보드 구조(상세)**: `MONITORING_VISUALIZATION.md`
 - **로깅 구조·필드**: `LOGGING_IMPLEMENTATION_SUMMARY.md`
 - **Rate limiting 메트릭**: `RATE_LIMITING_IMPLEMENTATION.md`

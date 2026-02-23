@@ -194,7 +194,7 @@ class NHNLoggerService:
 
         url = self.settings.nhn_log_url
 
-        async with record_external_request("nhn_log"):
+        async with record_external_request("log_api_server"):
             for attempt in range(self.MAX_RETRIES):
                 try:
                     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -218,14 +218,14 @@ class NHNLoggerService:
                         await asyncio.sleep(1 * (attempt + 1))
                         continue
                     # Final attempt failed, logs will be lost — 서버에 기록 (NHN 로거 사용 금지, 재귀 방지)
-                    external_request_errors_total.labels(service="nhn_log").inc()
+                    external_request_errors_total.labels(service="log_api_server").inc()
                     logging.getLogger("app").error(
                         "NHN Log send failed after retries",
                         extra={"event": "nhn_log", "error": str(e), "batch_size": len(logs)},
                     )
                     return False
 
-            external_request_errors_total.labels(service="nhn_log").inc()
+            external_request_errors_total.labels(service="log_api_server").inc()
             logging.getLogger("app").error(
                 "NHN Log send failed (non-200)",
                 extra={"event": "nhn_log", "batch_size": len(logs)},

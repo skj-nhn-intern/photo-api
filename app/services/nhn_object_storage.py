@@ -107,7 +107,7 @@ class NHNObjectStorageService:
             }
             
             try:
-                async with record_external_request("nhn_storage"):
+                async with record_external_request("obs_api_server"):
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         response = await client.post(
                             auth_url,
@@ -279,7 +279,7 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
+            async with record_external_request("obs_api_server"):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     # HEAD 요청으로 컨테이너 존재 확인
                     response = await client.head(
@@ -337,7 +337,7 @@ class NHNObjectStorageService:
         url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
+            async with record_external_request("obs_api_server"):
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     # PUT 메서드로 오브젝트 업로드
                     response = await client.put(
@@ -398,7 +398,7 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
+            async with record_external_request("obs_api_server"):
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     # GET 메서드로 오브젝트 다운로드
                     response = await client.get(
@@ -450,7 +450,7 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
+            async with record_external_request("obs_api_server"):
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     # DELETE 메서드로 오브젝트 삭제
                     response = await client.delete(
@@ -500,7 +500,7 @@ class NHNObjectStorageService:
             url = f"{storage_url}/{container}/{object_name}"
         
         try:
-            async with record_external_request("nhn_storage"):
+            async with record_external_request("obs_api_server"):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     # HEAD 메서드로 오브젝트 정보 조회
                     response = await client.head(

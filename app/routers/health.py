@@ -36,77 +36,21 @@ health_check_status = Gauge(
 
 @router.get(
     "",
-    summary="Health check (fast)",
+    summary="Health check",
 )
-async def health_check() -> Dict[str, Any]:
+async def health_check() -> Dict[str, str]:
     """
-    빠른 Health Check (로드밸런서용).
-    
-    - 애플리케이션 실행 상태만 확인
-    - 타임아웃: 2초 이내
-    - DB 연결은 간단히 확인 (타임아웃 짧게)
+    단순 Health Check (로드밸런서/프로브용).
+    준비 상태(ready)만 보고, 200 또는 503을 반환합니다.
     """
-    start_time = time.perf_counter()
-    
-    try:
-        # Ready 상태 확인
-        if ready._value.get() == 0:
-            health_check_status.labels(check_type="fast").set(0)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Application is shutting down",
-            )
-        
-        # DB 연결 간단 확인 (타임아웃 1초)
-        try:
-            async def _check_db():
-                async with engine.begin() as conn:
-                    await conn.execute(text("SELECT 1"))
-            
-            await asyncio.wait_for(_check_db(), timeout=1.0)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "DB health check timeout",
-                extra={"event": "health"},
-            )
-            health_check_status.labels(check_type="fast").set(0)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database connection timeout",
-            )
-        except Exception as e:
-            logger.warning(
-                "DB health check failed",
-                extra={"event": "health", "error": str(e)},
-            )
-            health_check_status.labels(check_type="fast").set(0)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database connection failed",
-            )
-        
-        duration = time.perf_counter() - start_time
-        
-        health_check_status.labels(check_type="fast").set(1)
-        
-        return {
-            "status": "healthy",
-            "duration_ms": round(duration * 1000, 2),
-            "instance": settings.instance_ip or "unknown",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            "Health check error",
-            extra={"event": "health", "error": str(e)},
-            exc_info=True,
-        )
+    if ready._value.get() == 0:
         health_check_status.labels(check_type="fast").set(0)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Health check failed",
+            detail="Application is shutting down",
         )
+    health_check_status.labels(check_type="fast").set(1)
+    return {"status": "ok"}
 
 
 @router.get(
@@ -182,7 +126,9 @@ async def detailed_health_check() -> Dict[str, Any]:
     상세 Health Check (모니터링 시스템용).
     
     - DB 연결 확인
-    - Object Storage 연결 확인 (실제 API 호출)
+    - OBS API server: **이 API 서버 → OBS 인증 엔드포인트** 연결 가능 여부만 확인.
+      (OBS 서비스 전체 상태가 아닌, 우리 인스턴스의 연동/의존성 상태임.)
+    - CDN API server: 별도 체크 없음. 실제 요청 시 메트릭(service=cdn_api_server)으로만 파악 가능.
     - 타임아웃: 5초 이내
     """
     start_time = time.perf_counter()
@@ -226,41 +172,47 @@ async def detailed_health_check() -> Dict[str, Any]:
             extra={"event": "health", "error": str(e)},
         )
     
-    # Object Storage 연결 확인 (타임아웃 1초)
+    # OBS API server: 이 API 서버 → OBS 인증 엔드포인트 연결 가능 여부만 확인.
+    # (OBS 서비스 전체 가동 상태가 아님. 연동/의존성 관점의 체크.)
     if settings.nhn_storage_iam_user or settings.nhn_storage_username:
         try:
             storage_service = get_storage_service()
-            # 토큰 존재 여부만 확인 (실제 API 호출은 짧게)
             token = await asyncio.wait_for(
                 storage_service._get_auth_token(),
                 timeout=1.0
             )
             if token:
-                checks["checks"]["object_storage"] = {"status": "up"}
+                checks["checks"]["obs_api_server"] = {
+                    "status": "up",
+                    "scope": "API server → OBS auth endpoint connectivity only",
+                }
             else:
                 checks["status"] = "unhealthy"
-                checks["checks"]["object_storage"] = {
+                checks["checks"]["obs_api_server"] = {
                     "status": "down",
                     "error": "Failed to get auth token",
+                    "scope": "API server → OBS auth endpoint connectivity only",
                 }
         except asyncio.TimeoutError:
             checks["status"] = "unhealthy"
-            checks["checks"]["object_storage"] = {
+            checks["checks"]["obs_api_server"] = {
                 "status": "down",
                 "error": "Timeout",
+                "scope": "API server → OBS auth endpoint connectivity only",
             }
         except Exception as e:
             checks["status"] = "unhealthy"
-            checks["checks"]["object_storage"] = {
+            checks["checks"]["obs_api_server"] = {
                 "status": "down",
                 "error": str(e)[:200],
+                "scope": "API server → OBS auth endpoint connectivity only",
             }
             logger.warning(
-                "Object Storage health check failed",
+                "OBS API server health check failed",
                 extra={"event": "health", "error": str(e)},
             )
     else:
-        checks["checks"]["object_storage"] = {"status": "skipped", "reason": "Not configured"}
+        checks["checks"]["obs_api_server"] = {"status": "skipped", "reason": "Not configured"}
     
     duration = time.perf_counter() - start_time
     checks["duration_ms"] = round(duration * 1000, 2)

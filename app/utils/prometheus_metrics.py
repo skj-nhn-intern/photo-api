@@ -13,6 +13,7 @@ import logging
 import socket
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 from urllib.parse import quote
 
@@ -43,6 +44,45 @@ external_request_errors_total = Counter(
     registry=REGISTRY,
 )
 
+# 외부 서비스 요청 수 (성공/실패 구분) — 에러율·성공률 계산용
+external_request_total = Counter(
+    "photo_api_external_request_total",
+    "Total external API requests by service and outcome",
+    ["service", "status"],  # status: success | failure
+    registry=REGISTRY,
+)
+
+# --- Circuit Breaker ---
+circuit_breaker_requests_total = Counter(
+    "photo_api_circuit_breaker_requests_total",
+    "Total number of requests passed through circuit breaker",
+    ["service", "status"],  # status: success | failure | rejected
+    registry=REGISTRY,
+)
+
+circuit_breaker_failures_total = Counter(
+    "photo_api_circuit_breaker_failures_total",
+    "Total number of failures by exception type",
+    ["service", "exception_type"],
+    registry=REGISTRY,
+)
+
+circuit_breaker_state_transitions_total = Counter(
+    "photo_api_circuit_breaker_state_transitions_total",
+    "Total number of state transitions",
+    ["service", "from_state", "to_state"],
+    registry=REGISTRY,
+)
+
+circuit_breaker_call_duration_seconds = Histogram(
+    "photo_api_circuit_breaker_call_duration_seconds",
+    "Circuit breaker function call duration in seconds",
+    ["service"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+    registry=REGISTRY,
+)
+
+
 # --- HA ---
 ready = Gauge(
     "photo_api_ready",
@@ -54,7 +94,7 @@ ready = Gauge(
 external_request_duration_seconds = Histogram(
     "photo_api_external_request_duration_seconds",
     "External API request duration in seconds",
-    ["service"],
+    ["service", "result"],  # result: success | failure
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
     registry=REGISTRY,
 )
@@ -248,6 +288,78 @@ photo_upload_size_total = Counter(
     registry=REGISTRY,
 )
 
+# --- 비즈니스 관점 도메인 메트릭 (집계·KPI) ---
+# 주기 집계(update_business_metrics)로 갱신되는 지표
+
+# 사용자: 신규 가입 (기간별)
+business_new_users_24h = Gauge(
+    "photo_api_business_new_users_24h",
+    "Number of new user registrations in the last 24 hours",
+    registry=REGISTRY,
+)
+business_new_users_7d = Gauge(
+    "photo_api_business_new_users_7d",
+    "Number of new user registrations in the last 7 days",
+    registry=REGISTRY,
+)
+
+# 앨범·사진: 사용자당/앨범당 평균 (engagement)
+business_avg_albums_per_user = Gauge(
+    "photo_api_business_avg_albums_per_user",
+    "Average number of albums per user (total_albums / total_users)",
+    registry=REGISTRY,
+)
+business_avg_photos_per_album = Gauge(
+    "photo_api_business_avg_photos_per_album",
+    "Average number of photos per album (total_photos / total_albums)",
+    registry=REGISTRY,
+)
+business_avg_photos_per_user = Gauge(
+    "photo_api_business_avg_photos_per_user",
+    "Average number of photos per user (total_photos / total_users)",
+    registry=REGISTRY,
+)
+
+# 앨범: 공유율 (%)
+business_share_rate_percent = Gauge(
+    "photo_api_business_share_rate_percent",
+    "Percentage of albums that have at least one active share link",
+    registry=REGISTRY,
+)
+
+# 사진: 최근 업로드 활동
+business_photos_uploaded_24h = Gauge(
+    "photo_api_business_photos_uploaded_24h",
+    "Number of photos uploaded in the last 24 hours",
+    registry=REGISTRY,
+)
+
+# 공유: 최근 생성·총 조회수
+business_share_links_created_24h = Gauge(
+    "photo_api_business_share_links_created_24h",
+    "Number of share links created in the last 24 hours",
+    registry=REGISTRY,
+)
+business_total_share_views = Gauge(
+    "photo_api_business_total_share_views",
+    "Total view count across all share links (sum of view_count)",
+    registry=REGISTRY,
+)
+
+# 인증: 가입·로그인 시도 (이벤트 기반 Counter)
+user_registration_total = Counter(
+    "photo_api_user_registration_total",
+    "Total user registration attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+user_login_total = Counter(
+    "photo_api_user_login_total",
+    "Total login attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
 
 class LogQueueSizeCollector:
     """Collector that reports NHN logger queue size (backpressure indicator)."""
@@ -284,21 +396,35 @@ async def update_business_metrics() -> None:
         from app.models.photo import Photo
         from app.models.share import ShareLink
         from sqlalchemy import select, func
-        
+
+        now = datetime.now(timezone.utc)
+        cutoff_24h = now - timedelta(hours=24)
+        cutoff_7d = now - timedelta(days=7)
+
         async with get_db_context() as db:
             # 회원수 집계
             total_users_result = await db.execute(select(func.count(User.id)))
             total_users = total_users_result.scalar() or 0
-            
+
             active_users_result = await db.execute(
                 select(func.count(User.id)).where(User.is_active == True)
             )
             active_users = active_users_result.scalar() or 0
-            
+
+            # 신규 가입 (24h, 7d)
+            new_users_24h_result = await db.execute(
+                select(func.count(User.id)).where(User.created_at >= cutoff_24h)
+            )
+            new_users_24h = new_users_24h_result.scalar() or 0
+            new_users_7d_result = await db.execute(
+                select(func.count(User.id)).where(User.created_at >= cutoff_7d)
+            )
+            new_users_7d = new_users_7d_result.scalar() or 0
+
             # 앨범 수 집계
             total_albums_result = await db.execute(select(func.count(Album.id)))
             total_albums = total_albums_result.scalar() or 0
-            
+
             # 공유 앨범 수 (share_links가 있는 앨범)
             shared_albums_result = await db.execute(
                 select(func.count(func.distinct(Album.id)))
@@ -306,58 +432,99 @@ async def update_business_metrics() -> None:
                 .where(ShareLink.is_active == True)
             )
             shared_albums = shared_albums_result.scalar() or 0
-            
+
             # 사진 수 집계
             total_photos_result = await db.execute(select(func.count(Photo.id)))
             total_photos = total_photos_result.scalar() or 0
-            
+
+            # 최근 24h 업로드 사진 수
+            photos_24h_result = await db.execute(
+                select(func.count(Photo.id)).where(Photo.created_at >= cutoff_24h)
+            )
+            photos_uploaded_24h = photos_24h_result.scalar() or 0
+
             # 공유 링크 수 집계
             total_share_links_result = await db.execute(select(func.count(ShareLink.id)))
             total_share_links = total_share_links_result.scalar() or 0
-            
+
             active_share_links_result = await db.execute(
                 select(func.count(ShareLink.id))
                 .where(ShareLink.is_active == True)
                 .where(
-                    (ShareLink.expires_at.is_(None)) | 
+                    (ShareLink.expires_at.is_(None)) |
                     (ShareLink.expires_at > func.now())
                 )
             )
             active_share_links = active_share_links_result.scalar() or 0
-            
+
+            # 최근 24h 공유 링크 생성 수
+            share_links_24h_result = await db.execute(
+                select(func.count(ShareLink.id)).where(ShareLink.created_at >= cutoff_24h)
+            )
+            share_links_created_24h = share_links_24h_result.scalar() or 0
+
+            # 공유 링크 총 조회수
+            total_share_views_result = await db.execute(select(func.sum(ShareLink.view_count)))
+            total_share_views = total_share_views_result.scalar() or 0
+
             # Object Storage 사용량 집계 (사진 파일 크기 합계)
             total_storage_result = await db.execute(
                 select(func.sum(Photo.file_size))
             )
             total_storage = total_storage_result.scalar() or 0
-            
+
             # 사용자별 Object Storage 사용량
             user_storage_result = await db.execute(
                 select(Photo.owner_id, func.sum(Photo.file_size).label("total_size"))
                 .group_by(Photo.owner_id)
             )
             user_storage_map = {row.owner_id: row.total_size for row in user_storage_result}
-            
-            # 메트릭 업데이트
+
+            # 메트릭 업데이트 (기존)
             users_total.labels(status="total").set(total_users)
             users_total.labels(status="active").set(active_users)
-            
+
             albums_total.labels(type="total").set(total_albums)
             albums_total.labels(type="shared").set(shared_albums)
-            
+
             photos_total.set(total_photos)
-            
+
             share_links_total.labels(status="total").set(total_share_links)
             share_links_total.labels(status="active").set(active_share_links)
-            
+
             object_storage_usage_bytes.set(total_storage)
-            
+
+            # 비즈니스 도메인 메트릭
+            business_new_users_24h.set(new_users_24h)
+            business_new_users_7d.set(new_users_7d)
+
+            if total_users > 0:
+                business_avg_albums_per_user.set(round(total_albums / total_users, 2))
+                business_avg_photos_per_user.set(round(total_photos / total_users, 2))
+            else:
+                business_avg_albums_per_user.set(0)
+                business_avg_photos_per_user.set(0)
+
+            if total_albums > 0:
+                business_avg_photos_per_album.set(round(total_photos / total_albums, 2))
+            else:
+                business_avg_photos_per_album.set(0)
+
+            if total_albums > 0:
+                business_share_rate_percent.set(
+                    round(shared_albums / total_albums * 100, 2)
+                )
+            else:
+                business_share_rate_percent.set(0)
+
+            business_photos_uploaded_24h.set(photos_uploaded_24h)
+            business_share_links_created_24h.set(share_links_created_24h)
+            business_total_share_views.set(total_share_views)
+
             # 사용자별 사용량 업데이트
-            # Note: Prometheus Gauge는 라벨이 없으면 자동으로 제거되지 않으므로
-            # 실제 운영에서는 별도 정리 로직이 필요할 수 있습니다.
             for user_id, size in user_storage_map.items():
                 object_storage_usage_by_user_bytes.labels(user_id=str(user_id)).set(size)
-                
+
     except Exception as e:
         logger.warning("Business metrics update failed: %s", e, exc_info=False)
 
@@ -400,7 +567,7 @@ def _node_identity() -> str:
 @asynccontextmanager
 async def record_external_request(service: str) -> AsyncGenerator[None, None]:
     """
-    Context manager to record external request duration and errors.
+    Context manager to record external request duration, total count, and errors.
     Use around NHN Storage/CDN/Log HTTP calls.
     """
     start = time.perf_counter()
@@ -410,10 +577,14 @@ async def record_external_request(service: str) -> AsyncGenerator[None, None]:
     except Exception as e:
         exc_raised = e
         external_request_errors_total.labels(service=service).inc()
+        external_request_total.labels(service=service, status="failure").inc()
         raise
     finally:
         duration = time.perf_counter() - start
-        external_request_duration_seconds.labels(service=service).observe(duration)
+        result = "failure" if exc_raised is not None else "success"
+        if exc_raised is None:
+            external_request_total.labels(service=service, status="success").inc()
+        external_request_duration_seconds.labels(service=service, result=result).observe(duration)
 
 
 def push_metrics_to_gateway() -> None:
@@ -516,5 +687,7 @@ def setup_prometheus(app) -> None:
     # Log queue size (custom collector)
     REGISTRY.register(LogQueueSizeCollector())
 
-    # FastAPI metrics
-    Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+    # FastAPI metrics — status 라벨을 2xx/3xx 대신 구체 코드(200, 201, 404, 500 등)로 노출
+    Instrumentator(should_group_status_codes=False).instrument(app).expose(
+        app, endpoint="/metrics"
+    )

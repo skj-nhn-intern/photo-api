@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.utils.prometheus_metrics import login_duration_seconds, users_total
+from app.utils.prometheus_metrics import (
+    login_duration_seconds,
+    users_total,
+    user_registration_total,
+    user_login_total,
+)
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
 from app.services.auth import AuthService
@@ -46,12 +51,14 @@ async def register(
             user_id=user.id,
         )
         
-        # 비즈니스 메트릭 실시간 업데이트: 회원수
+        # 비즈니스 메트릭 실시간 업데이트: 회원수, 가입 시도
         users_total.labels(status="total").inc()
         users_total.labels(status="active").inc()
-        
+        user_registration_total.labels(result="success").inc()
+
         return UserResponse.model_validate(user)
     except ValueError as e:
+        user_registration_total.labels(result="failure").inc()
         # 잠재적 문제 로깅 (WARN 레벨)
         log_warning(
             "User registration failed - validation error",
@@ -88,6 +95,7 @@ async def login(
     duration = time.perf_counter() - start
     result = "success" if token else "failure"
     login_duration_seconds.labels(result=result).observe(duration)
+    user_login_total.labels(result=result).inc()
 
     if not token:
         # 잠재적 문제 로깅 (WARN 레벨) - 무차별 대입 공격 탐지 가능
