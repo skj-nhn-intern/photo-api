@@ -381,6 +381,13 @@ business_total_share_views = Gauge(
     registry=REGISTRY,
 )
 
+# Temp URL 업로드 추적: TTL 만료 후 confirm 없는 건 수 (주기 집계로 갱신)
+temp_upload_incomplete_after_ttl = Gauge(
+    "photo_api_temp_upload_incomplete_after_ttl",
+    "Number of temp URL issuances not confirmed after URL expiry (expires_at < now, completed_at is null)",
+    registry=REGISTRY,
+)
+
 # 인증: 가입·로그인 시도 (이벤트 기반 Counter)
 user_registration_total = Counter(
     "photo_api_user_registration_total",
@@ -632,6 +639,11 @@ async def update_business_metrics() -> None:
                 .limit(10)
             )
             _top10_album_share_views = [(str(r.album_id), int(r.views)) for r in top_views_result.fetchall()]
+
+            # Temp URL 업로드 추적: TTL 만료 후 미확인 건 수
+            from app.services.temp_upload_tracking import aggregate_incomplete_after_ttl
+            agg = await aggregate_incomplete_after_ttl(db, now=now, limit=50_000)
+            temp_upload_incomplete_after_ttl.set(agg["total_count"])
 
     except Exception as e:
         logger.warning("Business metrics update failed: %s", e, exc_info=False)

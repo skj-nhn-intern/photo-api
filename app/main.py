@@ -28,6 +28,7 @@ from app.utils.prometheus_metrics import (
     ready,
     setup_prometheus,
     pushgateway_loop,
+    business_metrics_loop,
     in_flight_requests,
 )
 from app.middlewares.rate_limit_middleware import setup_rate_limit_exception_handler
@@ -77,6 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     # Pushgateway 연동: PROMETHEUS_PUSHGATEWAY_URL 설정 시 백그라운드에서 주기 푸시
     pushgateway_task = asyncio.create_task(pushgateway_loop())
+    # 비즈니스 메트릭 + Temp URL 업로드 추적: 60초마다 DB 집계 후 Gauge 갱신
+    business_metrics_task = asyncio.create_task(business_metrics_loop())
 
     yield
 
@@ -110,8 +113,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             )
     
     pushgateway_task.cancel()
+    business_metrics_task.cancel()
     try:
         await pushgateway_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await business_metrics_task
     except asyncio.CancelledError:
         pass
 

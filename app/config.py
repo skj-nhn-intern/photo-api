@@ -227,7 +227,7 @@ class Settings(BaseSettings):
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
     loki_logs_labels: str | None = Field(default=None, description="Deprecated: use Promtail for logs")
-    
+
     class Config:
         # 환경변수만 사용 (.env 파일 미사용). systemd EnvironmentFile=/etc/default/photo-api 등으로 설정
         env_file = None

@@ -37,6 +37,14 @@ from app.utils.prometheus_metrics import (
     photo_upload_confirm_total,
 )
 import time
+from datetime import datetime, timezone, timedelta
+
+from app.config import get_settings
+from app.services.temp_upload_tracking import (
+    record_issued,
+    mark_completed,
+    aggregate_incomplete_after_ttl,
+)
 
 router = APIRouter(prefix="/photos", tags=["Photos"])
 
@@ -193,15 +201,26 @@ async def get_presigned_upload_url(
         
         # Add photo to album
         await album_service.add_photos_to_album(album, [upload_data["photo_id"]], current_user.id)
+
+        # Temp URL 업로드 탐지: 발급 시 upload_id, 앨범ID, 유저ID, 발급시각 기록 (DB + 선택 Redis)
+        settings = get_settings()
+        issued_at = datetime.now(timezone.utc)
+        expires_at = issued_at + timedelta(seconds=settings.nhn_s3_presigned_url_expire_seconds)
+        await record_issued(
+            db,
+            upload_id=upload_data["photo_id"],
+            album_id=request.album_id,
+            user_id=current_user.id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+
         await db.commit()
-        
+
         # 메트릭 수집: Presigned URL 생성 성공
         presigned_url_generation_total.labels(result="success").inc()
         photo_upload_file_size_bytes.labels(upload_method="presigned").observe(request.file_size)
-        
-        from app.config import get_settings
-        settings = get_settings()
-        
+
         return PresignedUrlResponse(
             photo_id=upload_data["photo_id"],
             upload_url=upload_data["upload_url"],
@@ -255,8 +274,11 @@ async def confirm_photo_upload(
             user_id=current_user.id,
         )
         
+        # Temp URL 업로드 탐지: 완료 처리
+        await mark_completed(db, upload_id=request.photo_id)
+
         await db.commit()
-        
+
         # 메트릭 수집: 업로드 확인 성공, OBS 업로드 용량 추이
         photo_upload_confirm_total.labels(result="success").inc()
         photo_upload_total.labels(upload_method="presigned", result="success").inc()
@@ -276,6 +298,7 @@ async def confirm_photo_upload(
         # 메트릭 수집: 업로드 확인 실패
         photo_upload_confirm_total.labels(result="failure").inc()
         photo_upload_total.labels(upload_method="presigned", result="failure").inc()
+        logger.warning("Photo upload confirmation rejected", extra={"event": "photo_upload_confirm", "upload_id": request.photo_id, "user_id": current_user.id, "detail": str(e)})
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -284,7 +307,7 @@ async def confirm_photo_upload(
         # 메트릭 수집: 업로드 확인 실패
         photo_upload_confirm_total.labels(result="failure").inc()
         photo_upload_total.labels(upload_method="presigned", result="failure").inc()
-        logger.error("Photo upload confirmation failed", exc_info=e, extra={"event": "photo_upload_confirm", "user_id": current_user.id})
+        logger.error("Photo upload confirmation failed", exc_info=e, extra={"event": "photo_upload_confirm", "upload_id": request.photo_id, "user_id": current_user.id})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="업로드 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
@@ -438,6 +461,26 @@ async def get_photos(
 
 
 @router.get(
+    "/upload-tracking",
+    summary="Temp URL 업로드 추적 집계 (TTL 만료 후 confirm 없는 건)",
+)
+async def get_upload_tracking(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    TTL 만료 후에도 `POST /photos/confirm`이 호출되지 않은 Temp URL 업로드 건수를 집계합니다.
+
+    - **total_count**: 미완료 건수
+    - **by_user_id**, **by_album_id**: 구간별 건수
+    - **sample_records**: 샘플 (최대 100건)
+
+    상세: docs/TEMP-UPLOAD-AGGREGATION.md
+    """
+    return await aggregate_incomplete_after_ttl(db)
+
+
+@router.get(
     "/{photo_id}/image",
     summary="Image access (JWT required); redirects to CDN when configured",
 )
@@ -568,65 +611,6 @@ async def update_photo(
     
     updated_photo = await photo_service.update_photo(photo, update_data)
     return PhotoResponse.model_validate(updated_photo)
-
-
-@router.get(
-    "/{photo_id}/download",
-    summary="Download a photo",
-)
-async def download_photo(
-    photo_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Download a photo file.
-    
-    - **photo_id**: ID of the photo to download
-    
-    Returns the photo file as a downloadable attachment.
-    """
-    photo_service = PhotoService(db)
-    photo = await photo_service.get_photo_by_id(photo_id, current_user.id)
-    
-    if not photo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Photo not found",
-        )
-    
-    try:
-        # Download file from Object Storage
-        file_content = await photo_service.download_photo(photo)
-        
-        # Determine filename
-        filename = photo.original_filename or photo.filename
-        if not filename or '.' not in filename:
-            # Add extension based on content type
-            ext_map = {
-                'image/jpeg': '.jpg',
-                'image/png': '.png',
-                'image/gif': '.gif',
-                'image/webp': '.webp',
-                'image/heic': '.heic',
-            }
-            ext = ext_map.get(photo.content_type, '.jpg')
-            filename = f"photo_{photo.id}{ext}"
-        
-        from fastapi.responses import Response
-        return Response(
-            content=file_content,
-            media_type=photo.content_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
-    except Exception as e:
-        logger.error("Photo download failed", exc_info=e, extra={"event": "photo_download", "photo_id": photo_id})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to download photo",
-        )
 
 
 @router.delete(

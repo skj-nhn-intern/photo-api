@@ -86,7 +86,7 @@ class PhotoService:
         await self.db.flush()
         await self.db.refresh(photo)
         # 업로드 성공은 INFO (중요 비즈니스 이벤트)
-        logger.info("Photo uploaded", extra={"event": "photo_upload", "photo_id": photo.id, "user_id": user.id})
+        logger.info("Photo uploaded", extra={"event": "photo_upload", "upload_id": photo.id, "photo_id": photo.id, "user_id": user.id})
         return photo
     
     async def get_photo_by_id(
@@ -296,7 +296,7 @@ class PhotoService:
             
             logger.info(
                 "Temp upload URL generated",
-                extra={"event": "photo_presigned", "photo_id": photo.id, "user_id": user.id}
+                extra={"event": "photo_presigned", "upload_id": photo.id, "photo_id": photo.id, "user_id": user.id}
             )
             
             return {
@@ -347,13 +347,13 @@ class PhotoService:
             if not file_exists:
                 logger.error(
                     "Photo upload verification failed - file not found",
-                    extra={"event": "photo_upload_confirm", "photo_id": photo_id, "user_id": user_id}
+                    extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
                 )
                 raise ValueError("업로드된 파일을 찾을 수 없습니다. 업로드를 다시 시도해주세요.")
             
             logger.info(
                 "Photo upload confirmed",
-                extra={"event": "photo_upload_confirm", "photo_id": photo_id, "user_id": user_id}
+                extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
             )
             
             return photo
@@ -364,6 +364,6 @@ class PhotoService:
             logger.error(
                 "Photo upload verification failed",
                 exc_info=e,
-                extra={"event": "photo_upload_confirm", "photo_id": photo_id, "user_id": user_id}
+                extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
             )
             raise ValueError("파일 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
