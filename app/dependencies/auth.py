@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import AuthService
-from app.utils.prometheus_metrics import active_sessions
+from app.utils.prometheus_metrics import active_sessions, jwt_token_validation_total
 from app.utils.security import decode_access_token
 
 logger = logging.getLogger("app.auth")
@@ -45,12 +45,14 @@ async def get_current_user(
     )
 
     if not credentials:
+        jwt_token_validation_total.labels(result="failure").inc()
         logger.warning("Auth failed", extra={"event": "auth", "reason": "no_token"})
         raise credentials_exception
 
     token_payload = decode_access_token(credentials.credentials)
 
     if token_payload is None:
+        jwt_token_validation_total.labels(result="failure").inc()
         logger.warning("Auth failed", extra={"event": "auth", "reason": "invalid_or_expired_token"})
         raise credentials_exception
 
@@ -58,9 +60,11 @@ async def get_current_user(
     user = await auth_service.get_user_by_id(token_payload.sub)
 
     if user is None:
+        jwt_token_validation_total.labels(result="failure").inc()
         logger.warning("Auth failed", extra={"event": "auth", "reason": "user_not_found", "user_id": token_payload.sub})
         raise credentials_exception
 
+    jwt_token_validation_total.labels(result="success").inc()
     # Prometheus: 활성 세션 수 (인증된 요청 처리 중)
     active_sessions.inc()
     request.state._active_sessions_metric_inc = True

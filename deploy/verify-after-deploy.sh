@@ -12,7 +12,7 @@ set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-photo-api}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
-MAX_WAIT="${MAX_WAIT:-30}"   # 헬스 체크 재시도 최대 대기 시간(초)
+MAX_WAIT="${MAX_WAIT:-15}"   # 헬스 체크 재대기 최대 시간(초)
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
 
 # BASE_URL에서 호스트/포트만 추출 (표준 출력용)
@@ -37,28 +37,27 @@ check_service() {
   return 0
 }
 
-# 2) 헬스 엔드포인트 200 + body에 healthy (경로는 /health/ — trailing slash 필수, 미사용 시 307 리다이렉트)
+# 2) 헬스 엔드포인트 200 + body에 "ok" 또는 "healthy" (앱은 /health → {"status":"ok"})
 check_health() {
-  echo "2. 헬스 체크 ($url_display/health/)"
+  echo "2. 헬스 체크 ($url_display/health)"
   local waited=0
   local code body
   while true; do
-    code=$(curl -s -o /tmp/photo-api-health-$$.json -w "%{http_code}" --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$BASE_URL/health/" 2>/dev/null || echo "000")
+    code=$(curl -s -o /tmp/photo-api-health-$$.json -w "%{http_code}" --connect-timeout 3 --max-time 5 "$BASE_URL/health" 2>/dev/null || echo "000")
     body=$(cat /tmp/photo-api-health-$$.json 2>/dev/null || true)
     rm -f /tmp/photo-api-health-$$.json
 
-    if [[ "$code" == "200" ]] && echo "$body" | grep -q "healthy"; then
-      ok "HTTP $code, body: $body"
+    if [[ "$code" == "200" ]] && echo "$body" | grep -q '"ok"'; then
+      ok "HTTP $code"
       return 0
     fi
     if [[ "$waited" -ge "$MAX_WAIT" ]]; then
-      fail "헬스 실패 (HTTP $code, body: ${body:0:80})"
+      fail "헬스 실패 (HTTP $code)"
       if [[ "$code" == "000" ]]; then
-        echo "    연결 불가(Connection refused/타임아웃). 아래 진단 참고." >&2
+        echo "    연결 불가. 진단 출력 참고." >&2
       fi
       return 1
     fi
-    echo "    대기 중... (${waited}s/${MAX_WAIT}s)"
     sleep 2
     waited=$((waited + 2))
   done

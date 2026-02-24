@@ -15,7 +15,10 @@ from app.services.album import AlbumService
 from app.services.photo import PhotoService
 from app.middlewares.rate_limit_middleware import get_rate_limit_decorator, get_client_identifier
 from app.utils.prometheus_metrics import (
+    album_access_duration_seconds,
+    album_access_size_bucket,
     share_link_access_total,
+    share_link_access_by_album_total,
     share_link_brute_force_attempts,
     share_link_access_duration_seconds,
     share_link_image_access_total,
@@ -97,11 +100,16 @@ async def get_shared_album(
             detail="Album not found",
         )
     
-    # 성공
+    # 성공 — 앨범별 접속량(TOP 10 시각화용), 용량별 앨범 접근 시간
     share_link_access_total.labels(token_status="valid", result="success").inc()
+    share_link_access_by_album_total.labels(album_id=str(share_link.album_id)).inc()
     duration = time.perf_counter() - start_time
     share_link_access_duration_seconds.labels(token_status="valid", result="success").observe(duration)
-    
+    album_access_duration_seconds.labels(
+        size_bucket=album_access_size_bucket(shared_album.photo_count),
+        access_type="shared",
+    ).observe(duration)
+
     return shared_album
 
 

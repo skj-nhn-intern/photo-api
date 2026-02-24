@@ -199,9 +199,17 @@ photo_upload_file_size_bytes = Histogram(
     registry=REGISTRY,
 )
 
+# OBS Presigned URL(임시 URL) 요청량 — 이미지 업로드용
 presigned_url_generation_total = Counter(
     "photo_api_presigned_url_generation_total",
-    "Total number of presigned URL generation attempts",
+    "Total number of OBS presigned (temp) URL generation attempts",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+# CDN Auth Token API 요청량
+cdn_auth_token_requests_total = Counter(
+    "photo_api_cdn_auth_token_requests_total",
+    "Total CDN Auth Token API requests (image delivery URL generation)",
     ["result"],  # result: success | failure
     registry=REGISTRY,
 )
@@ -220,6 +228,26 @@ album_operations_total = Counter(
     ["operation", "result"],  # operation: create | update | delete, result: success | failure
     registry=REGISTRY,
 )
+# 용량별 앨범 접근 시간 (사진 수 구간: empty/small/medium/large)
+album_access_duration_seconds = Histogram(
+    "photo_api_album_access_duration_seconds",
+    "Album access request duration in seconds (get album with photos), by size bucket",
+    ["size_bucket", "access_type"],  # size_bucket: empty|small|medium|large, access_type: authenticated|shared
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0),
+    registry=REGISTRY,
+)
+
+
+def album_access_size_bucket(photo_count: int) -> str:
+    """Return size_bucket label for album_access_duration_seconds (0=empty, 1-10=small, 11-50=medium, 51+=large)."""
+    if photo_count == 0:
+        return "empty"
+    if photo_count <= 10:
+        return "small"
+    if photo_count <= 50:
+        return "medium"
+    return "large"
+
 
 album_photo_operations_total = Counter(
     "photo_api_album_photo_operations_total",
@@ -233,6 +261,13 @@ share_link_creation_total = Counter(
     "photo_api_share_link_creation_total",
     "Total number of share link creation attempts",
     ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+# 공유 링크 접속량(앨범별) — 접속량 많은 앨범 TOP 10 시각화용
+share_link_access_by_album_total = Counter(
+    "photo_api_share_link_access_by_album_total",
+    "Total successful share link access count by album",
+    ["album_id"],
     registry=REGISTRY,
 )
 
@@ -359,6 +394,52 @@ user_login_total = Counter(
     ["result"],  # result: success | failure
     registry=REGISTRY,
 )
+jwt_token_validation_total = Counter(
+    "photo_api_jwt_token_validation_total",
+    "Total JWT token validation attempts (Bearer token on protected routes)",
+    ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
+# 앨범별 Top 10 시각화용 (update_business_metrics에서 갱신, AlbumTop10Collector에서 노출)
+_top10_album_photo_count: list[tuple[str, int]] = []  # (album_id, count)
+_top10_album_storage_bytes: list[tuple[str, int]] = []  # (album_id, bytes)
+_top10_album_share_views: list[tuple[str, int]] = []  # (album_id, views)
+
+
+class AlbumTop10Collector:
+    """Exposes Top 10 albums by photo count, storage size, and share views (low cardinality)."""
+
+    def collect(self):
+        m_photos = GaugeMetricFamily(
+            "photo_api_album_top10_by_photo_count",
+            "Top 10 albums by photo count (rank 1=highest)",
+            labels=["rank", "album_id"],
+        )
+        for rank, (album_id, value) in enumerate(_top10_album_photo_count[:10], start=1):
+            m_photos.add_metric([str(rank), str(album_id)], float(value))
+        if _top10_album_photo_count:
+            yield m_photos
+
+        m_storage = GaugeMetricFamily(
+            "photo_api_album_top10_by_storage_bytes",
+            "Top 10 albums by total image storage in bytes (rank 1=highest)",
+            labels=["rank", "album_id"],
+        )
+        for rank, (album_id, value) in enumerate(_top10_album_storage_bytes[:10], start=1):
+            m_storage.add_metric([str(rank), str(album_id)], float(value))
+        if _top10_album_storage_bytes:
+            yield m_storage
+
+        m_views = GaugeMetricFamily(
+            "photo_api_album_top10_by_share_views",
+            "Top 10 albums by share link view count (rank 1=highest)",
+            labels=["rank", "album_id"],
+        )
+        for rank, (album_id, value) in enumerate(_top10_album_share_views[:10], start=1):
+            m_views.add_metric([str(rank), str(album_id)], float(value))
+        if _top10_album_share_views:
+            yield m_views
 
 
 class LogQueueSizeCollector:
@@ -392,7 +473,7 @@ async def update_business_metrics() -> None:
     try:
         from app.database import get_db_context
         from app.models.user import User
-        from app.models.album import Album
+        from app.models.album import Album, AlbumPhoto
         from app.models.photo import Photo
         from app.models.share import ShareLink
         from sqlalchemy import select, func
@@ -525,6 +606,33 @@ async def update_business_metrics() -> None:
             for user_id, size in user_storage_map.items():
                 object_storage_usage_by_user_bytes.labels(user_id=str(user_id)).set(size)
 
+            # 앨범별 Top 10 (이미지 개수, 저장 용량, 공유 조회수)
+            global _top10_album_photo_count, _top10_album_storage_bytes, _top10_album_share_views
+            top_photos_result = await db.execute(
+                select(AlbumPhoto.album_id, func.count(AlbumPhoto.photo_id).label("cnt"))
+                .group_by(AlbumPhoto.album_id)
+                .order_by(func.count(AlbumPhoto.photo_id).desc())
+                .limit(10)
+            )
+            _top10_album_photo_count = [(str(r.album_id), r.cnt) for r in top_photos_result.fetchall()]
+
+            top_storage_result = await db.execute(
+                select(AlbumPhoto.album_id, func.coalesce(func.sum(Photo.file_size), 0).label("total_bytes"))
+                .join(Photo, Photo.id == AlbumPhoto.photo_id)
+                .group_by(AlbumPhoto.album_id)
+                .order_by(func.sum(Photo.file_size).desc())
+                .limit(10)
+            )
+            _top10_album_storage_bytes = [(str(r.album_id), int(r.total_bytes)) for r in top_storage_result.fetchall()]
+
+            top_views_result = await db.execute(
+                select(ShareLink.album_id, func.coalesce(func.sum(ShareLink.view_count), 0).label("views"))
+                .group_by(ShareLink.album_id)
+                .order_by(func.sum(ShareLink.view_count).desc())
+                .limit(10)
+            )
+            _top10_album_share_views = [(str(r.album_id), int(r.views)) for r in top_views_result.fetchall()]
+
     except Exception as e:
         logger.warning("Business metrics update failed: %s", e, exc_info=False)
 
@@ -598,6 +706,8 @@ def push_metrics_to_gateway() -> None:
         return
     job = "photo-api"
     grouping_key = {"instance": settings.instance_ip or _node_identity()}
+    if (settings.region or "").strip():
+        grouping_key["region"] = (settings.region or "").strip()
     try:
         # pushadd_to_gateway uses POST; push_to_gateway uses PUT (some gateways/proxies return 501 for PUT)
         pushadd_to_gateway(url, job=job, registry=REGISTRY, grouping_key=grouping_key)
@@ -670,11 +780,11 @@ def setup_prometheus(app) -> None:
     settings = get_settings()
     node = _node_identity()
 
-    # Node/App identity
+    # Node/App identity (region = REGION env)
     app_info = Gauge(
         "photo_api_app_info",
         "Application and node identity (labels only, value is 1)",
-        ["node", "app", "version", "environment"],
+        ["node", "app", "version", "environment", "region"],
         registry=REGISTRY,
     )
     app_info.labels(
@@ -682,10 +792,12 @@ def setup_prometheus(app) -> None:
         app=settings.app_name,
         version=settings.app_version,
         environment=settings.environment.value,
+        region=(settings.region or "").strip() or "unknown",
     ).set(1)
 
     # Log queue size (custom collector)
     REGISTRY.register(LogQueueSizeCollector())
+    REGISTRY.register(AlbumTop10Collector())
 
     # FastAPI metrics — status 라벨을 2xx/3xx 대신 구체 코드(200, 201, 404, 500 등)로 노출
     Instrumentator(should_group_status_codes=False).instrument(app).expose(

@@ -191,7 +191,11 @@ class JsonLinesFormatter(logging.Formatter):
         payload["host"] = INSTANCE_IP
         payload["instance_ip"] = getattr(record, "instance_ip", None) or INSTANCE_IP
         payload["environment"] = settings.environment.value.lower()
-        payload["region"] = getattr(record, "region", None) or "kr1"
+        payload["region"] = (
+            getattr(record, "region", None)
+            or (getattr(settings, "region", None) or "").strip()
+            or "unknown"
+        )
         payload["version"] = getattr(record, "version", None) or settings.app_version
         
         # 요청 컨텍스트

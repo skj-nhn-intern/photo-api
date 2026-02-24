@@ -62,7 +62,7 @@ else:
         _database_url,
         echo=False,  # SQL 로그 비활성화
         poolclass=QueuePool,
-        pool_size=5,
+        pool_size=10,
         max_overflow=10,
         pool_timeout=30,
         pool_recycle=1800,

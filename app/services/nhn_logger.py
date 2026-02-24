@@ -126,6 +126,7 @@ class NHNLoggerService:
         **extra: Any,
     ) -> dict:
         """Create a log message body following NHN Cloud API format."""
+        region = (getattr(self.settings, "region", None) or "").strip() or "unknown"
         body = {
             "projectName": self.settings.nhn_log_appkey,
             "projectVersion": self.settings.app_version,
@@ -136,6 +137,7 @@ class NHNLoggerService:
             "logType": "log",
             "host": self._host,
             "platform": self._platform,
+            "region": region,
             "sendTime": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         }
         

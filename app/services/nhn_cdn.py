@@ -13,6 +13,7 @@ import httpx
 
 from app.config import get_settings
 from app.utils.prometheus_metrics import (
+    cdn_auth_token_requests_total,
     external_request_errors_total,
     record_external_request,
 )
@@ -91,6 +92,7 @@ class NHNCDNService:
                     data = response.json()
                     if data.get("header", {}).get("isSuccessful"):
                         token = data.get("authToken", {}).get("singlePathToken")
+                        cdn_auth_token_requests_total.labels(result="success").inc()
                         return token
                     else:
                         logger.error(
@@ -98,11 +100,13 @@ class NHNCDNService:
                             extra={"event": "cdn_token", "status": response.status_code},
                         )
                         external_request_errors_total.labels(service="cdn_api_server").inc()
+                        cdn_auth_token_requests_total.labels(result="failure").inc()
                         return None
 
         except httpx.HTTPError as e:
             logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn_token"})
             external_request_errors_total.labels(service="cdn_api_server").inc()
+            cdn_auth_token_requests_total.labels(result="failure").inc()
             return None
     
     async def generate_auth_token_url(

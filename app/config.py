@@ -196,6 +196,7 @@ class Settings(BaseSettings):
     
     # Prometheus (Observability). Loki 로그는 Promtail이 /var/log/photo-api 파일을 읽어 전송
     node_name: str = Field(default="", description="Node/Pod identifier for Prometheus labels")
+    region: str = Field(default="", description="Deployment region (REGION env). 메트릭·로그 식별용")
     # Pushgateway: 설정 시 주기적으로 메트릭을 Pushgateway로 전송 (추후 연동용)
     prometheus_pushgateway_url: str = Field(
         default="",
