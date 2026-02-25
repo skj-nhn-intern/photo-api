@@ -14,6 +14,7 @@ Nginx는 API 앞단에서 트래픽을 받으므로, **요청량·응답 코드�
 ```
 📁 Photo API
 ├── 📄 SLO/SLI Overview          ← 전체 SLO/SLI 요약
+├── 📄 External Service           ← 외부 서비스(OBS/CDN/Log) 요청량·성공률·지연 (요청량은 external_request_total 사용)
 └── 📁 Service Monitor
     ├── 📄 User (Auth)            ← 인증: 로그인·회원가입
     ├── 📄 Album                  ← 앨범 CRUD·앨범-사진
@@ -78,6 +79,7 @@ Nginx 메트릭은 수집 방식에 따라 사용 가능한 지표가 다릅니�
 - **경로 필터**: User 서비스는 `http_path=~"/auth.*"` 또는 `http_path=~".*auth.*"` (prefix 있을 때). Album `/albums.*`, Image `/photos.*`, Share `/share.*`.
 - **이벤트 필터**: auth 관련은 `event="user_login"`, `event="user_registration"`, `event="auth"`.
 - **로그 소스**: `conf/promtail-config.yaml` — `job_name: photo-api`, `__path__: /var/log/photo-api/app.log`. JSON 한 줄 단위로 전송. Promtail은 **event**, **level**, **path_prefix** 를 스트림 라벨로 추출함(서비스 모니터링용). 상세: `docs/log/2026-02-17-promtail-labels-and-service-monitoring-logs.md`.
+
 
 **event 횟수 현황 (event별 건수 추이)**  
 Loki에서 **event 값별 로그 건수**를 보고 싶을 때:

@@ -58,7 +58,7 @@
 
 - [x] **연결 풀링**
   - 위치: `app/database.py`
-  - 설정: `pool_size=5`, `max_overflow=10`, `pool_timeout=30`, `pool_recycle=1800`
+  - 설정: `pool_size=10`, `max_overflow=30` (총 최대 40개), `pool_timeout=30`, `pool_recycle=1800`
   - 환경 변수로 설정 가능
 
 - [x] **연결 상태 확인**

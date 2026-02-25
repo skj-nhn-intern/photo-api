@@ -230,6 +230,7 @@ groups:
 
 ## 5. 관련 문서
 
+- **외부 서비스 요청량 전용 대시보드**: `docs/monitoring/EXTERNAL-SERVICE-DASHBOARD.md` — 요청량은 `photo_api_external_request_total` 사용, `_duration_seconds_bucket` 는 지연용.
 - **지표 정의·알림 상세**: 프로젝트 루트 `HA_MONITORING_METRICS.md` (Circuit Breaker·외부 서비스 섹션 포함)
 - **대시보드 구성·시각화**: `docs/monitoring/SERVICE-MONITORING-DASHBOARD.md`
 - **구현**: `app/utils/circuit_breaker.py`, `app/utils/prometheus_metrics.py` (`record_external_request`)

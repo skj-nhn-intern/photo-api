@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 from app.utils.prometheus_metrics import db_errors_total, REGISTRY, Gauge
@@ -61,9 +61,8 @@ else:
     engine = create_async_engine(
         _database_url,
         echo=False,  # SQL 로그 비활성화
-        poolclass=QueuePool,
         pool_size=10,
-        max_overflow=10,
+        max_overflow=30,
         pool_timeout=30,
         pool_recycle=1800,
         pool_pre_ping=True,
@@ -91,31 +90,35 @@ def _after_cursor_execute(conn, cursor, statement, parameters, context, executem
 
 
 # DB 연결 풀 모니터링 (PostgreSQL/MySQL만, SQLite는 제외)
-if "sqlite" not in _database_url and hasattr(engine.sync_engine, "pool"):
+# create_async_engine 기본은 AsyncAdaptedQueuePool → sync_engine.pool은 내부 QueuePool 또는 래퍼
+if "sqlite" not in _database_url and hasattr(engine, "sync_engine") and hasattr(engine.sync_engine, "pool"):
+    def _get_pool():
+        p = engine.sync_engine.pool
+        # AsyncAdaptedQueuePool 등은 내부 sync QueuePool을 .pool 또는 .sync_pool로 가짐
+        return getattr(p, "sync_pool", None) or getattr(p, "pool", p)
+
+    def _pool_metric_total():
+        """총 연결 수 = pool_size + overflow (체크아웃 포함). 기존 pool.size()는 대기 중+overflow만 있어 부하 시 0에 가깝게 나옴."""
+        pool = _get_pool()
+        if not hasattr(pool, "overflow"):
+            return
+        overflow = pool.overflow()
+        pool_size = getattr(pool, "_pool_maxsize", 10)
+        total = pool_size + overflow
+        db_pool_active_connections.set(total)
+        db_pool_waiting_requests.set(overflow)  # overflow 개수(초과 연결 수)
+
     @event.listens_for(engine.sync_engine, "connect")
     def _on_connect(dbapi_conn, connection_record):
-        """연결 체크아웃 시 호출."""
-        pool = engine.sync_engine.pool
-        if hasattr(pool, "size"):
-            db_pool_active_connections.set(pool.size())
-    
+        _pool_metric_total()
+
     @event.listens_for(engine.sync_engine, "checkout")
     def _on_checkout(dbapi_conn, connection_record, connection_proxy):
-        """연결 체크아웃 시 호출."""
-        pool = engine.sync_engine.pool
-        if hasattr(pool, "size"):
-            db_pool_active_connections.set(pool.size())
-        if hasattr(pool, "overflow"):
-            db_pool_waiting_requests.set(pool.overflow())
-    
+        _pool_metric_total()
+
     @event.listens_for(engine.sync_engine, "checkin")
     def _on_checkin(dbapi_conn, connection_record):
-        """연결 체크인 시 호출."""
-        pool = engine.sync_engine.pool
-        if hasattr(pool, "size"):
-            db_pool_active_connections.set(pool.size())
-        if hasattr(pool, "overflow"):
-            db_pool_waiting_requests.set(pool.overflow())
+        _pool_metric_total()
 
 
 # Create async session factory
