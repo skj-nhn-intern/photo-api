@@ -62,8 +62,8 @@ photo_api_users_total{status="active"} / photo_api_users_total{status="total"} *
 | `photo_api_business_avg_albums_per_user` | Gauge | — | 주기 집계 | 사용자당 평균 앨범 수 |
 | `photo_api_business_avg_photos_per_album` | Gauge | — | 주기 집계 | 앨범당 평균 사진 수 |
 | `photo_api_business_share_rate_percent` | Gauge | — | 주기 집계 | 공유 앨범 비율(%) |
-| `photo_api_album_operations_total` | Counter | `operation`, `result` | 이벤트 | 생성/수정/삭제 성공·실패 |
-| `photo_api_album_photo_operations_total` | Counter | `operation`, `result` | 이벤트 | 사진 추가/제거 성공·실패 |
+| `photo_api_album_operations_total` | Counter | `operation`, `result`, `access_type` | 이벤트 | 생성/수정/삭제 성공·실패 (access_type: authenticated) |
+| `photo_api_album_photo_operations_total` | Counter | `operation`, `result`, `access_type` | 이벤트 | 사진 추가/제거 성공·실패 (access_type: authenticated) |
 
 ### 2.3 쿼리 예시
 

@@ -53,7 +53,7 @@ async def create_album(
         album = await album_service.create_album(current_user, album_data)
         
         # 메트릭 수집: 앨범 생성 성공
-        album_operations_total.labels(operation="create", result="success").inc()
+        album_operations_total.labels(operation="create", result="success", access_type="authenticated").inc()
         
         photo_count = await album_service.get_album_photo_count(album.id)
         
@@ -69,7 +69,7 @@ async def create_album(
         )
     except Exception as e:
         # 메트릭 수집: 앨범 생성 실패
-        album_operations_total.labels(operation="create", result="failure").inc()
+        album_operations_total.labels(operation="create", result="failure", access_type="authenticated").inc()
         raise
 
 
@@ -178,7 +178,7 @@ async def update_album(
         updated_album = await album_service.update_album(album, update_data)
         
         # 메트릭 수집: 앨범 수정 성공
-        album_operations_total.labels(operation="update", result="success").inc()
+        album_operations_total.labels(operation="update", result="success", access_type="authenticated").inc()
         
         photo_count = await album_service.get_album_photo_count(updated_album.id)
         
@@ -194,7 +194,7 @@ async def update_album(
         )
     except Exception as e:
         # 메트릭 수집: 앨범 수정 실패
-        album_operations_total.labels(operation="update", result="failure").inc()
+        album_operations_total.labels(operation="update", result="failure", access_type="authenticated").inc()
         raise
 
 
@@ -227,10 +227,10 @@ async def delete_album(
     try:
         await album_service.delete_album(album)
         # 메트릭 수집: 앨범 삭제 성공
-        album_operations_total.labels(operation="delete", result="success").inc()
+        album_operations_total.labels(operation="delete", result="success", access_type="authenticated").inc()
     except Exception as e:
         # 메트릭 수집: 앨범 삭제 실패
-        album_operations_total.labels(operation="delete", result="failure").inc()
+        album_operations_total.labels(operation="delete", result="failure", access_type="authenticated").inc()
         raise
 
 
@@ -271,12 +271,12 @@ async def add_photos_to_album(
         )
         
         # 메트릭 수집: 앨범에 사진 추가 성공
-        album_photo_operations_total.labels(operation="add", result="success").inc()
+        album_photo_operations_total.labels(operation="add", result="success", access_type="authenticated").inc()
         
         return {"message": f"{added} photo(s) added to album"}
     except Exception as e:
         # 메트릭 수집: 앨범에 사진 추가 실패
-        album_photo_operations_total.labels(operation="add", result="failure").inc()
+        album_photo_operations_total.labels(operation="add", result="failure", access_type="authenticated").inc()
         raise
 
 
@@ -314,12 +314,12 @@ async def remove_photos_from_album(
         )
         
         # 메트릭 수집: 앨범에서 사진 제거 성공
-        album_photo_operations_total.labels(operation="remove", result="success").inc()
+        album_photo_operations_total.labels(operation="remove", result="success", access_type="authenticated").inc()
         
         return {"message": f"{removed} photo(s) removed from album"}
     except Exception as e:
         # 메트릭 수집: 앨범에서 사진 제거 실패
-        album_photo_operations_total.labels(operation="remove", result="failure").inc()
+        album_photo_operations_total.labels(operation="remove", result="failure", access_type="authenticated").inc()
         raise
 
 

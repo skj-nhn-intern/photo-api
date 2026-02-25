@@ -120,10 +120,14 @@ class Settings(BaseSettings):
         description="(호환용) 이미지 URL을 API 경로로 할지 여부. 현재는 항상 API 경로(/photos/{id}/image) 사용.",
     )
     image_token_expire_seconds: int = Field(
-        default=120,
-        description="이미지 302 리다이렉트 시 CDN 토큰 유효 시간(초).",
+        default=600,
+        description="이미지 302 리다이렉트 시 CDN 토큰 유효 시간(초). (인증 사용자 /photos/{id}/image). 기본 10분.",
     )
-    
+    share_image_token_expire_seconds: int = Field(
+        default=7200,
+        description="공유 링크 이미지 CDN 토큰 유효 시간(초). 기본 2시간. 공유 페이지 둘러보기·탭 유지에 적당.",
+    )
+
     # Rate Limiting
     rate_limit_enabled: bool = Field(
         default=True,

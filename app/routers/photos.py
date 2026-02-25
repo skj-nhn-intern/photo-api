@@ -521,6 +521,7 @@ async def get_photo_image(
         cdn_url = await photo_service.cdn.generate_auth_token_url(
             photo.storage_path,
             expires_in=settings.image_token_expire_seconds,
+            access_type="authenticated",
         )
         if cdn_url:
             # 성공: CDN 리다이렉트

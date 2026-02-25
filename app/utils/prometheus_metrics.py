@@ -137,11 +137,11 @@ rate_limit_requests_total = Counter(
     registry=REGISTRY,
 )
 
-# --- Share Link Access Patterns ---
+# --- Share Link Access Patterns (access_type=shared 통일) ---
 share_link_access_total = Counter(
     "photo_api_share_link_access_total",
-    "Total number of share link access attempts",
-    ["token_status", "result"],  # token_status: valid | invalid | expired, result: success | denied
+    "Total number of share link access attempts (album)",
+    ["token_status", "result", "access_type"],  # access_type: shared
     registry=REGISTRY,
 )
 
@@ -154,8 +154,8 @@ share_link_brute_force_attempts = Counter(
 
 share_link_access_duration_seconds = Histogram(
     "photo_api_share_link_access_duration_seconds",
-    "Share link access request duration in seconds",
-    ["token_status", "result"],
+    "Share link access request duration in seconds (album)",
+    ["token_status", "result", "access_type"],  # access_type: shared
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
     registry=REGISTRY,
 )
@@ -163,7 +163,7 @@ share_link_access_duration_seconds = Histogram(
 share_link_image_access_total = Counter(
     "photo_api_share_link_image_access_total",
     "Total number of share link image access attempts",
-    ["token_status", "photo_in_album"],  # photo_in_album: yes | no
+    ["token_status", "photo_in_album", "access_type"],  # access_type: shared
     registry=REGISTRY,
 )
 
@@ -206,11 +206,11 @@ presigned_url_generation_total = Counter(
     ["result"],  # result: success | failure
     registry=REGISTRY,
 )
-# CDN Auth Token API 요청량
+# CDN Auth Token API 요청량 (공유/사설 구분)
 cdn_auth_token_requests_total = Counter(
     "photo_api_cdn_auth_token_requests_total",
     "Total CDN Auth Token API requests (image delivery URL generation)",
-    ["result"],  # result: success | failure
+    ["result", "access_type"],  # result: success | failure, access_type: authenticated | shared
     registry=REGISTRY,
 )
 
@@ -224,8 +224,8 @@ photo_upload_confirm_total = Counter(
 # --- Album Metrics ---
 album_operations_total = Counter(
     "photo_api_album_operations_total",
-    "Total number of album operations",
-    ["operation", "result"],  # operation: create | update | delete, result: success | failure
+    "Total number of album operations (create, update, delete)",
+    ["operation", "result", "access_type"],  # operation: create|update|delete, result: success|failure, access_type: authenticated
     registry=REGISTRY,
 )
 # 용량별 앨범 접근 시간 (사진 수 구간: empty/small/medium/large)
@@ -251,8 +251,8 @@ def album_access_size_bucket(photo_count: int) -> str:
 
 album_photo_operations_total = Counter(
     "photo_api_album_photo_operations_total",
-    "Total number of album photo operations",
-    ["operation", "result"],  # operation: add | remove, result: success | failure
+    "Total number of album photo operations (add/remove photo in album)",
+    ["operation", "result", "access_type"],  # operation: add|remove, result: success|failure, access_type: authenticated
     registry=REGISTRY,
 )
 
@@ -267,7 +267,7 @@ share_link_creation_total = Counter(
 share_link_access_by_album_total = Counter(
     "photo_api_share_link_access_by_album_total",
     "Total successful share link access count by album",
-    ["album_id"],
+    ["album_id", "access_type"],  # access_type: shared
     registry=REGISTRY,
 )
 
@@ -412,6 +412,35 @@ jwt_token_validation_total = Counter(
 _top10_album_photo_count: list[tuple[str, int]] = []  # (album_id, count)
 _top10_album_storage_bytes: list[tuple[str, int]] = []  # (album_id, bytes)
 _top10_album_share_views: list[tuple[str, int]] = []  # (album_id, views)
+
+# 종류별( content_type ) 총 이미지 수·용량 (update_business_metrics에서 갱신, PhotosByTypeCollector에서 노출)
+_photos_by_content_type: list[tuple[str, int]] = []  # (content_type, count)
+_storage_by_content_type: list[tuple[str, int]] = []  # (content_type, bytes)
+
+
+class PhotosByTypeCollector:
+    """Exposes total photo count and total storage bytes by content_type (종류별 이미지 수·용량)."""
+
+    def collect(self):
+        m_count = GaugeMetricFamily(
+            "photo_api_photos_total_by_content_type",
+            "Total number of photos by content type (MIME type)",
+            labels=["content_type"],
+        )
+        for content_type, count in _photos_by_content_type:
+            m_count.add_metric([content_type], float(count))
+        if _photos_by_content_type:
+            yield m_count
+
+        m_bytes = GaugeMetricFamily(
+            "photo_api_object_storage_usage_by_content_type_bytes",
+            "Total object storage usage in bytes by content type (MIME type)",
+            labels=["content_type"],
+        )
+        for content_type, size_bytes in _storage_by_content_type:
+            m_bytes.add_metric([content_type], float(size_bytes))
+        if _storage_by_content_type:
+            yield m_bytes
 
 
 class AlbumTop10Collector:
@@ -640,6 +669,19 @@ async def update_business_metrics() -> None:
             )
             _top10_album_share_views = [(str(r.album_id), int(r.views)) for r in top_views_result.fetchall()]
 
+            # 종류별( content_type ) 총 이미지 수·용량
+            global _photos_by_content_type, _storage_by_content_type
+            by_type_count_result = await db.execute(
+                select(Photo.content_type, func.count(Photo.id).label("cnt"))
+                .group_by(Photo.content_type)
+            )
+            _photos_by_content_type = [(r.content_type, r.cnt) for r in by_type_count_result.fetchall()]
+            by_type_storage_result = await db.execute(
+                select(Photo.content_type, func.coalesce(func.sum(Photo.file_size), 0).label("total_bytes"))
+                .group_by(Photo.content_type)
+            )
+            _storage_by_content_type = [(r.content_type, int(r.total_bytes)) for r in by_type_storage_result.fetchall()]
+
             # Temp URL 업로드 추적: TTL 만료 후 미확인 건 수
             from app.services.temp_upload_tracking import aggregate_incomplete_after_ttl
             agg = await aggregate_incomplete_after_ttl(db, now=now, limit=50_000)
@@ -810,6 +852,7 @@ def setup_prometheus(app) -> None:
     # Log queue size (custom collector)
     REGISTRY.register(LogQueueSizeCollector())
     REGISTRY.register(AlbumTop10Collector())
+    REGISTRY.register(PhotosByTypeCollector())
 
     # FastAPI metrics — status 라벨을 2xx/3xx 대신 구체 코드(200, 201, 404, 500 등)로 노출
     Instrumentator(should_group_status_codes=False).instrument(app).expose(

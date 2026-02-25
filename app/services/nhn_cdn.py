@@ -43,14 +43,16 @@ class NHNCDNService:
         self,
         path: str,
         duration_seconds: Optional[int] = None,
+        access_type: str = "authenticated",
     ) -> Optional[str]:
         """
         NHN Cloud CDN API를 호출하여 Auth Token을 생성합니다.
-        
+
         Args:
             path: CDN 경로 (예: "/photo/photos/1/xxx.jpg")
             duration_seconds: 토큰 유효 시간 (초)
-            
+            access_type: "authenticated" (인증 사용자) | "shared" (공유 링크). 메트릭 라벨용.
+
         Returns:
             생성된 토큰 문자열, 실패시 None
         """
@@ -92,7 +94,7 @@ class NHNCDNService:
                     data = response.json()
                     if data.get("header", {}).get("isSuccessful"):
                         token = data.get("authToken", {}).get("singlePathToken")
-                        cdn_auth_token_requests_total.labels(result="success").inc()
+                        cdn_auth_token_requests_total.labels(result="success", access_type=access_type).inc()
                         return token
                     else:
                         logger.error(
@@ -100,24 +102,25 @@ class NHNCDNService:
                             extra={"event": "cdn_token", "status": response.status_code},
                         )
                         external_request_errors_total.labels(service="cdn_api_server").inc()
-                        cdn_auth_token_requests_total.labels(result="failure").inc()
+                        cdn_auth_token_requests_total.labels(result="failure", access_type=access_type).inc()
                         return None
 
         except httpx.HTTPError as e:
             logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn_token"})
             external_request_errors_total.labels(service="cdn_api_server").inc()
-            cdn_auth_token_requests_total.labels(result="failure").inc()
+            cdn_auth_token_requests_total.labels(result="failure", access_type=access_type).inc()
             return None
     
     async def generate_auth_token_url(
         self,
         object_path: str,
         expires_in: Optional[int] = None,
+        access_type: str = "authenticated",
     ) -> Optional[str]:
         """
         Generate a CDN URL with Auth Token for secure access.
         이미지 보기는 이 CDN Auth Token URL 또는 백엔드 스트리밍만 사용 (S3 GET presigned 미사용).
-        
+
         **보안 보장:**
         - OBS URL을 절대 반환하지 않음
         - CDN Auth Token이 포함된 URL만 반환
@@ -127,6 +130,7 @@ class NHNCDNService:
         Args:
             object_path: The path to the object in storage (e.g., "image/2/uuid.png")
             expires_in: Token expiration time in seconds (default from settings)
+            access_type: "authenticated" (인증 사용자) | "shared" (공유 링크). 메트릭 라벨용.
 
         Returns:
             CDN URL with auth token, or None if CDN 미설정 or 토큰 발급 실패 (호출자는 스트리밍 fallback)
@@ -161,7 +165,7 @@ class NHNCDNService:
                 return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
         
         # Auth Token 생성 (CDN API 호출)
-        token = await self._request_auth_token(cdn_path, expires_in)
+        token = await self._request_auth_token(cdn_path, expires_in, access_type=access_type)
         
         if token:
             self._token_cache[cache_key] = (token, time.time() + expires_in)

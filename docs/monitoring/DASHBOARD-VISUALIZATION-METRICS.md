@@ -55,6 +55,8 @@
 
 | 시각화 항목 | PromQL / 메트릭 | 시각화 | Unit |
 |-------------|------------------|--------|------|
+| **종류별 총 이미지 수** | `photo_api_photos_total_by_content_type` (content_type) | Table / Pie / Bar gauge | short |
+| **종류별 총 이미지 용량** | `photo_api_object_storage_usage_by_content_type_bytes` (content_type) | Table / Pie / Bar gauge | bytes (IEC) |
 | **갑자기 OBS 사용량이 늘었을 때, 누가 많이 올렸나?** | 사용자별 누적 업로드 용량(기간): `topk(10, increase(photo_api_photo_upload_size_total_bytes[1h]))` 또는 현재 사용자별 사용량: `photo_api_object_storage_usage_by_user_bytes` | Table / Time series | bytes (IEC) |
 | **OBS에 업로드한 총 용량 추이** | `increase(photo_api_photo_upload_size_total_bytes[1h])` (1h 구간 증분) 또는 `sum(photo_api_photo_upload_size_total_bytes)` (누적, Grafana에서 시계열로) | Time series | bytes (IEC) |
 
@@ -72,7 +74,7 @@
 | `photo_api_photo_upload_total` | Counter (upload_method, result) | 이미지 업로드 요청량 |
 | `photo_api_image_access_total` | Counter (access_type, result) | 이미지 다운로드(접근) 요청량 |
 | `photo_api_image_access_duration_seconds` | Histogram | 이미지 접근 시간 |
-| `photo_api_album_operations_total` | Counter (operation, result) | 앨범 생성량 |
+| `photo_api_album_operations_total` | Counter (operation, result, access_type) | 앨범 생성/수정/삭제 (access_type: authenticated) |
 | `photo_api_album_access_duration_seconds` | Histogram (size_bucket, access_type) | 용량별 앨범 접근 시간 |
 | `photo_api_album_top10_by_photo_count` | Gauge (rank, album_id) | 앨범별 이미지 개수 Top 10 |
 | `photo_api_album_top10_by_storage_bytes` | Gauge (rank, album_id) | 앨범별 이미지 총량 Top 10 |
@@ -85,3 +87,5 @@
 | `photo_api_photo_upload_size_total_bytes` | Counter (user_id) | 사용자별·총 OBS 업로드 용량 추이 |
 | `photo_api_object_storage_usage_by_user_bytes` | Gauge (user_id) | 사용자별 현재 OBS 사용량 |
 | `photo_api_object_storage_usage_bytes` | Gauge | 전체 OBS 사용량 |
+| `photo_api_photos_total_by_content_type` | Gauge (content_type) | 종류별(MIME) 총 이미지 수 |
+| `photo_api_object_storage_usage_by_content_type_bytes` | Gauge (content_type) | 종류별(MIME) 총 이미지 용량 |
