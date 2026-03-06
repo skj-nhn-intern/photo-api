@@ -49,28 +49,23 @@ async def create_album(
     - **description**: Optional album description
     """
     album_service = AlbumService(db)
-    try:
-        album = await album_service.create_album(current_user, album_data)
-        
-        # 메트릭 수집: 앨범 생성 성공
-        album_operations_total.labels(operation="create", result="success", access_type="authenticated").inc()
-        
-        photo_count = await album_service.get_album_photo_count(album.id)
-        
-        return AlbumResponse(
-            id=album.id,
-            owner_id=album.owner_id,
-            name=album.name,
-            description=album.description,
-            cover_photo_id=album.cover_photo_id,
-            photo_count=photo_count,
-            created_at=album.created_at,
-            updated_at=album.updated_at,
-        )
-    except Exception as e:
-        # 메트릭 수집: 앨범 생성 실패
-        album_operations_total.labels(operation="create", result="failure", access_type="authenticated").inc()
-        raise
+    album = await album_service.create_album(current_user, album_data)
+    
+    # 메트릭 수집: 앨범 생성 성공
+    album_operations_total.labels(operation="create", result="success", access_type="authenticated").inc()
+    
+    photo_count = await album_service.get_album_photo_count(album.id)
+    
+    return AlbumResponse(
+        id=album.id,
+        owner_id=album.owner_id,
+        name=album.name,
+        description=album.description,
+        cover_photo_id=album.cover_photo_id,
+        photo_count=photo_count,
+        created_at=album.created_at,
+        updated_at=album.updated_at,
+    )
 
 
 @router.get(
@@ -174,28 +169,23 @@ async def update_album(
             detail="Album not found",
         )
     
-    try:
-        updated_album = await album_service.update_album(album, update_data)
-        
-        # 메트릭 수집: 앨범 수정 성공
-        album_operations_total.labels(operation="update", result="success", access_type="authenticated").inc()
-        
-        photo_count = await album_service.get_album_photo_count(updated_album.id)
-        
-        return AlbumResponse(
-            id=updated_album.id,
-            owner_id=updated_album.owner_id,
-            name=updated_album.name,
-            description=updated_album.description,
-            cover_photo_id=updated_album.cover_photo_id,
-            photo_count=photo_count,
-            created_at=updated_album.created_at,
-            updated_at=updated_album.updated_at,
-        )
-    except Exception as e:
-        # 메트릭 수집: 앨범 수정 실패
-        album_operations_total.labels(operation="update", result="failure", access_type="authenticated").inc()
-        raise
+    updated_album = await album_service.update_album(album, update_data)
+    
+    # 메트릭 수집: 앨범 수정 성공
+    album_operations_total.labels(operation="update", result="success", access_type="authenticated").inc()
+    
+    photo_count = await album_service.get_album_photo_count(updated_album.id)
+    
+    return AlbumResponse(
+        id=updated_album.id,
+        owner_id=updated_album.owner_id,
+        name=updated_album.name,
+        description=updated_album.description,
+        cover_photo_id=updated_album.cover_photo_id,
+        photo_count=photo_count,
+        created_at=updated_album.created_at,
+        updated_at=updated_album.updated_at,
+    )
 
 
 @router.delete(
@@ -224,14 +214,9 @@ async def delete_album(
             detail="Album not found",
         )
     
-    try:
-        await album_service.delete_album(album)
-        # 메트릭 수집: 앨범 삭제 성공
-        album_operations_total.labels(operation="delete", result="success", access_type="authenticated").inc()
-    except Exception as e:
-        # 메트릭 수집: 앨범 삭제 실패
-        album_operations_total.labels(operation="delete", result="failure", access_type="authenticated").inc()
-        raise
+    await album_service.delete_album(album)
+    # 메트릭 수집: 앨범 삭제 성공
+    album_operations_total.labels(operation="delete", result="success", access_type="authenticated").inc()
 
 
 # ============== Album Photos ==============
@@ -265,19 +250,14 @@ async def add_photos_to_album(
             detail="Album not found",
         )
     
-    try:
-        added = await album_service.add_photos_to_album(
-            album, photo_data.photo_ids, current_user.id
-        )
-        
-        # 메트릭 수집: 앨범에 사진 추가 성공
-        album_photo_operations_total.labels(operation="add", result="success", access_type="authenticated").inc()
-        
-        return {"message": f"{added} photo(s) added to album"}
-    except Exception as e:
-        # 메트릭 수집: 앨범에 사진 추가 실패
-        album_photo_operations_total.labels(operation="add", result="failure", access_type="authenticated").inc()
-        raise
+    added = await album_service.add_photos_to_album(
+        album, photo_data.photo_ids, current_user.id
+    )
+    
+    # 메트릭 수집: 앨범에 사진 추가 성공
+    album_photo_operations_total.labels(operation="add", result="success", access_type="authenticated").inc()
+    
+    return {"message": f"{added} photo(s) added to album"}
 
 
 @router.delete(
@@ -308,19 +288,14 @@ async def remove_photos_from_album(
             detail="Album not found",
         )
     
-    try:
-        removed = await album_service.remove_photos_from_album(
-            album, photo_data.photo_ids
-        )
-        
-        # 메트릭 수집: 앨범에서 사진 제거 성공
-        album_photo_operations_total.labels(operation="remove", result="success", access_type="authenticated").inc()
-        
-        return {"message": f"{removed} photo(s) removed from album"}
-    except Exception as e:
-        # 메트릭 수집: 앨범에서 사진 제거 실패
-        album_photo_operations_total.labels(operation="remove", result="failure", access_type="authenticated").inc()
-        raise
+    removed = await album_service.remove_photos_from_album(
+        album, photo_data.photo_ids
+    )
+    
+    # 메트릭 수집: 앨범에서 사진 제거 성공
+    album_photo_operations_total.labels(operation="remove", result="success", access_type="authenticated").inc()
+    
+    return {"message": f"{removed} photo(s) removed from album"}
 
 
 # ============== Share Links ==============
@@ -365,26 +340,21 @@ async def create_share_link(
     # Get base URL for share link
     base_url = str(request.base_url).rstrip("/")
     
-    try:
-        share_link = await album_service.create_share_link(album, share_data, base_url)
-        
-        # 메트릭 수집: 공유 링크 생성 성공
-        share_link_creation_total.labels(result="success").inc()
-        
-        return ShareLinkResponse(
-            id=share_link.id,
-            album_id=share_link.album_id,
-            token=share_link.token,
-            is_active=share_link.is_active,
-            expires_at=share_link.expires_at,
-            view_count=share_link.view_count,
-            created_at=share_link.created_at,
-            share_url=f"{base_url}/share/{share_link.token}",
-        )
-    except Exception as e:
-        # 메트릭 수집: 공유 링크 생성 실패
-        share_link_creation_total.labels(result="failure").inc()
-        raise
+    share_link = await album_service.create_share_link(album, share_data, base_url)
+    
+    # 메트릭 수집: 공유 링크 생성 성공
+    share_link_creation_total.labels(result="success").inc()
+    
+    return ShareLinkResponse(
+        id=share_link.id,
+        album_id=share_link.album_id,
+        token=share_link.token,
+        is_active=share_link.is_active,
+        expires_at=share_link.expires_at,
+        view_count=share_link.view_count,
+        created_at=share_link.created_at,
+        share_url=f"{base_url}/share/{share_link.token}",
+    )
 
 
 @router.get(

@@ -57,14 +57,24 @@
 
 ---
 
-## 5. 재시도(Retry)
+## 5. DB (Database)
+
+| 이벤트 | 의미 | level 예시 |
+|--------|------|------------|
+| `db` | DB 세션/쿼리 | WARNING=느린 쿼리(1초 이상), ERROR=트랜잭션 예외 |
+
+**DB 로그 보는 방법**: [database-logging.md](./database-logging.md) 참고.
+
+---
+
+## 6. 재시도(Retry)
 
 - **이벤트**: `retry`
 - **재시도 대상**: `retry_target` 필드 (예: `"storage.upload"`, `"cdn.token"`)
 
 ---
 
-## 6. Loki/대시보드 쿼리 예시
+## 7. Loki/대시보드 쿼리 예시
 
 - **액션별 실패 건수**  
   `{job="photo-api"} | json | event="photo_upload" | level="ERROR"`
@@ -74,3 +84,5 @@
   `event=~"photo_.*"`
 - **서비스(Share) 이벤트만**  
   `event=~"share_.*"`
+- **DB 이벤트(에러/느린 쿼리)**  
+  `event="db"`

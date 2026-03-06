@@ -293,7 +293,7 @@ curl "http://localhost:8000/share/{token}"
 
 - **Python 3.11** + FastAPI + 모든 의존성 패키지
 - **Promtail**: Loki로 로그 전송
-- **Prometheus 메트릭**: 앱 `/metrics` 엔드포인트 (스크래핑). 추후 [Pushgateway](PROMETHEUS_PUSHGATEWAY.md) 연동 시 주기 푸시 지원
+- **Prometheus 메트릭**: 앱 `/metrics` 엔드포인트 (스크래핑). 추후 [Pushgateway](PROMETHEUS_PUSHGATEWAY.md) 연동 시 주기 푸시 지원. 메트릭 목록·라벨·갱신 방식은 [docs/monitoring/METRICS-REFERENCE.md](docs/monitoring/METRICS-REFERENCE.md) 참고.
 - **systemd 서비스**: 자동 시작 설정
 
 #### 수동 빌드

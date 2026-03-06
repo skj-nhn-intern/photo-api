@@ -189,62 +189,45 @@ async def get_presigned_upload_url(
     # Prepare upload
     photo_service = PhotoService(db)
     
-    try:
-        upload_data = await photo_service.prepare_photo_upload(
-            user=current_user,
-            album_id=request.album_id,
-            filename=request.filename,
-            content_type=request.content_type,
-            file_size=request.file_size,
-            metadata=metadata,
-        )
-        
-        # Add photo to album
-        await album_service.add_photos_to_album(album, [upload_data["photo_id"]], current_user.id)
+    upload_data = await photo_service.prepare_photo_upload(
+        user=current_user,
+        album_id=request.album_id,
+        filename=request.filename,
+        content_type=request.content_type,
+        file_size=request.file_size,
+        metadata=metadata,
+    )
+    
+    # Add photo to album
+    await album_service.add_photos_to_album(album, [upload_data["photo_id"]], current_user.id)
 
-        # Temp URL 업로드 탐지: 발급 시 upload_id, 앨범ID, 유저ID, 발급시각 기록 (DB + 선택 Redis)
-        settings = get_settings()
-        issued_at = datetime.now(timezone.utc)
-        expires_at = issued_at + timedelta(seconds=settings.nhn_s3_presigned_url_expire_seconds)
-        await record_issued(
-            db,
-            upload_id=upload_data["photo_id"],
-            album_id=request.album_id,
-            user_id=current_user.id,
-            issued_at=issued_at,
-            expires_at=expires_at,
-        )
+    # Temp URL 업로드 탐지: 발급 시 upload_id, 앨범ID, 유저ID, 발급시각 기록 (DB + 선택 Redis)
+    settings = get_settings()
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(seconds=settings.nhn_s3_presigned_url_expire_seconds)
+    await record_issued(
+        db,
+        upload_id=upload_data["photo_id"],
+        album_id=request.album_id,
+        user_id=current_user.id,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
 
-        await db.commit()
+    await db.commit()
 
-        # 메트릭 수집: Presigned URL 생성 성공
-        presigned_url_generation_total.labels(result="success").inc()
-        photo_upload_file_size_bytes.labels(upload_method="presigned").observe(request.file_size)
+    # 메트릭 수집: Presigned URL 생성 성공
+    presigned_url_generation_total.labels(result="success").inc()
+    photo_upload_file_size_bytes.labels(upload_method="presigned").observe(request.file_size)
 
-        return PresignedUrlResponse(
-            photo_id=upload_data["photo_id"],
-            upload_url=upload_data["upload_url"],
-            object_key=upload_data["object_key"],
-            expires_in=settings.nhn_s3_presigned_url_expire_seconds,
-            upload_method=upload_data["upload_method"],
-            upload_headers=upload_data.get("upload_headers", {}),
-        )
-        
-    except ValueError as e:
-        # 메트릭 수집: Presigned URL 생성 실패
-        presigned_url_generation_total.labels(result="failure").inc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
-    except Exception as e:
-        # 메트릭 수집: Presigned URL 생성 실패
-        presigned_url_generation_total.labels(result="failure").inc()
-        logger.error("Presigned URL generation failed", exc_info=e, extra={"event": "photo_presigned", "user_id": current_user.id})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Presigned URL 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
-        )
+    return PresignedUrlResponse(
+        photo_id=upload_data["photo_id"],
+        upload_url=upload_data["upload_url"],
+        object_key=upload_data["object_key"],
+        expires_in=settings.nhn_s3_presigned_url_expire_seconds,
+        upload_method=upload_data["upload_method"],
+        upload_headers=upload_data.get("upload_headers", {}),
+    )
 
 
 @router.post(
@@ -268,50 +251,30 @@ async def confirm_photo_upload(
     """
     photo_service = PhotoService(db)
     
-    try:
-        photo = await photo_service.confirm_photo_upload(
-            photo_id=request.photo_id,
-            user_id=current_user.id,
-        )
-        
-        # Temp URL 업로드 탐지: 완료 처리
-        await mark_completed(db, upload_id=request.photo_id)
+    photo = await photo_service.confirm_photo_upload(
+        photo_id=request.photo_id,
+        user_id=current_user.id,
+    )
+    
+    # Temp URL 업로드 탐지: 완료 처리
+    await mark_completed(db, upload_id=request.photo_id)
 
-        await db.commit()
+    await db.commit()
 
-        # 메트릭 수집: 업로드 확인 성공, OBS 업로드 용량 추이
-        photo_upload_confirm_total.labels(result="success").inc()
-        photo_upload_total.labels(upload_method="presigned", result="success").inc()
-        photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+    # 메트릭 수집: 업로드 확인 성공, OBS 업로드 용량 추이
+    photo_upload_confirm_total.labels(result="success").inc()
+    photo_upload_total.labels(upload_method="presigned", result="success").inc()
+    photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
 
-        # Generate CDN URL for the uploaded photo
-        photo_with_url = await photo_service.get_photo_with_url(photo)
-        
-        return PhotoUploadConfirmResponse(
-            photo_id=photo.id,
-            filename=photo.original_filename,
-            url=photo_with_url.url,
-            message="Photo upload confirmed successfully",
-        )
-        
-    except ValueError as e:
-        # 메트릭 수집: 업로드 확인 실패
-        photo_upload_confirm_total.labels(result="failure").inc()
-        photo_upload_total.labels(upload_method="presigned", result="failure").inc()
-        logger.warning("Photo upload confirmation rejected", extra={"event": "photo_upload_confirm", "upload_id": request.photo_id, "user_id": current_user.id, "detail": str(e)})
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as e:
-        # 메트릭 수집: 업로드 확인 실패
-        photo_upload_confirm_total.labels(result="failure").inc()
-        photo_upload_total.labels(upload_method="presigned", result="failure").inc()
-        logger.error("Photo upload confirmation failed", exc_info=e, extra={"event": "photo_upload_confirm", "upload_id": request.photo_id, "user_id": current_user.id})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="업로드 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-        )
+    # Generate CDN URL for the uploaded photo
+    photo_with_url = await photo_service.get_photo_with_url(photo)
+    
+    return PhotoUploadConfirmResponse(
+        photo_id=photo.id,
+        filename=photo.original_filename,
+        url=photo_with_url.url,
+        message="Photo upload confirmed successfully",
+    )
 
 
 @router.post(
@@ -383,54 +346,35 @@ async def upload_photo(
     # Upload photo
     photo_service = PhotoService(db)
     
-    try:
-        photo = await photo_service.upload_photo(
-            user=current_user,
-            album_id=album_id,
-            file_content=content,
-            filename=file.filename or "photo",
-            content_type=content_type,
-            metadata=metadata,
-        )
-        
-        # Add photo to album
-        await album_service.add_photos_to_album(album, [photo.id], current_user.id)
-        await db.commit()
-        
-        # 메트릭 수집: 직접 업로드 성공, OBS 업로드 용량 추이
-        photo_upload_total.labels(upload_method="direct", result="success").inc()
-        photo_upload_file_size_bytes.labels(upload_method="direct").observe(len(content))
-        photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+    photo = await photo_service.upload_photo(
+        user=current_user,
+        album_id=album_id,
+        file_content=content,
+        filename=file.filename or "photo",
+        content_type=content_type,
+        metadata=metadata,
+    )
+    
+    # Add photo to album
+    await album_service.add_photos_to_album(album, [photo.id], current_user.id)
+    await db.commit()
+    
+    # 메트릭 수집: 직접 업로드 성공, OBS 업로드 용량 추이
+    photo_upload_total.labels(upload_method="direct", result="success").inc()
+    photo_upload_file_size_bytes.labels(upload_method="direct").observe(len(content))
+    photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
 
-        # Generate CDN URL for the uploaded photo
-        photo_with_url = await photo_service.get_photo_with_url(photo)
-        
-        return PhotoUploadResponse(
-            id=photo.id,
-            filename=photo.filename,
-            original_filename=photo.original_filename,
-            content_type=photo.content_type,
-            file_size=photo.file_size,
-            url=photo_with_url.url,
-        )
-        
-    except ValueError as e:
-        # 메트릭 수집: 직접 업로드 실패
-        photo_upload_total.labels(upload_method="direct", result="failure").inc()
-        # ValueError는 이미 로그에 기록됨
-        # 사용자 친화적인 에러 메시지만 반환 (내부 정보 노출 방지)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
-        )
-    except Exception as e:
-        # 메트릭 수집: 직접 업로드 실패
-        photo_upload_total.labels(upload_method="direct", result="failure").inc()
-        logger.error("Photo upload failed", exc_info=e, extra={"event": "photo_upload", "user_id": current_user.id})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.",
-        )
+    # Generate CDN URL for the uploaded photo
+    photo_with_url = await photo_service.get_photo_with_url(photo)
+    
+    return PhotoUploadResponse(
+        id=photo.id,
+        filename=photo.filename,
+        original_filename=photo.original_filename,
+        content_type=photo.content_type,
+        file_size=photo.file_size,
+        url=photo_with_url.url,
+    )
 
 
 @router.get(
@@ -532,21 +476,11 @@ async def get_photo_image(
             return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
     # CDN 미설정 또는 토큰 실패 시: 백엔드 스트리밍
     # ⚠️ 보안: OBS URL을 절대 반환하지 않음. 백엔드를 통해 스트리밍하여 보안 보장.
-    try:
-        file_content = await photo_service.download_photo(photo)
-        # 성공: 백엔드 스트리밍
-        image_access_total.labels(access_type="authenticated", result="success").inc()
-        duration = time.perf_counter() - start_time
-        image_access_duration_seconds.labels(access_type="authenticated", result="success").observe(duration)
-    except Exception as e:
-        image_access_total.labels(access_type="authenticated", result="denied").inc()
-        duration = time.perf_counter() - start_time
-        image_access_duration_seconds.labels(access_type="authenticated", result="denied").observe(duration)
-        logger.error("Photo stream failed", exc_info=e, extra={"event": "photo_stream", "photo_id": photo_id})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to load photo",
-        )
+    file_content = await photo_service.download_photo(photo)
+    # 성공: 백엔드 스트리밍
+    image_access_total.labels(access_type="authenticated", result="success").inc()
+    duration = time.perf_counter() - start_time
+    image_access_duration_seconds.labels(access_type="authenticated", result="success").observe(duration)
     return Response(
         content=file_content,
         media_type=photo.content_type or "application/octet-stream",

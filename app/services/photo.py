@@ -57,19 +57,11 @@ class PhotoService:
         # Storage path: photo/photo/image/{album_id}/{filename} (컨테이너 내 경로)
         storage_path = f"photo/photo/image/{album_id}/{unique_filename}"
         
-        try:
-            await self.storage.upload_file(
-                file_content=file_content,
-                object_name=storage_path,
-                content_type=content_type,
-            )
-        except Exception as e:
-            logger.error(
-                "Photo upload failed",
-                exc_info=e,
-                extra={"event": "photo_upload", "user_id": user.id, "path": storage_path},
-            )
-            raise ValueError("사진 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.")
+        await self.storage.upload_file(
+            file_content=file_content,
+            object_name=storage_path,
+            content_type=content_type,
+        )
         
         photo = Photo(
             owner_id=user.id,
@@ -174,13 +166,10 @@ class PhotoService:
         """
         try:
             await self.storage.delete_file(photo.storage_path)
-        except Exception as e:
+        except Exception:
             # 스토리지 삭제 실패해도 DB에서는 삭제 (고아 파일 허용)
-            logger.error(
-                "Photo storage delete failed",
-                exc_info=e,
-                extra={"event": "photo_delete", "photo_id": photo.id},
-            )
+            # 예외는 전역 핸들러에서 처리되므로 여기서는 무시
+            pass
         await self.db.delete(photo)
         await self.db.flush()
         # 삭제 성공은 로깅 안 함 (운영 노이즈 최소화)
@@ -196,15 +185,7 @@ class PhotoService:
         Returns:
             File content as bytes
         """
-        try:
-            return await self.storage.download_file(photo.storage_path)
-        except Exception as e:
-            logger.error(
-                "Photo download failed",
-                exc_info=e,
-                extra={"event": "photo_download", "photo_id": photo.id},
-            )
-            raise ValueError("사진 다운로드에 실패했습니다.")
+        return await self.storage.download_file(photo.storage_path)
     
     async def get_photo_with_url(self, photo: Photo) -> PhotoWithUrl:
         """
@@ -307,16 +288,12 @@ class PhotoService:
                 "object_key": storage_path,
             }
             
-        except Exception as e:
+        except Exception:
             # If presigned URL generation fails, delete the photo record
             await self.db.delete(photo)
             await self.db.flush()
-            logger.error(
-                "Presigned URL generation failed",
-                exc_info=e,
-                extra={"event": "photo_presigned", "user_id": user.id},
-            )
-            raise ValueError("Presigned URL 생성에 실패했습니다. 잠시 후 다시 시도해주세요.")
+            # 예외는 전역 핸들러에서 처리되므로 재발생
+            raise
     
     async def confirm_photo_upload(
         self,
@@ -342,28 +319,13 @@ class PhotoService:
             raise ValueError("사진을 찾을 수 없거나 접근 권한이 없습니다.")
         
         # Verify file exists in storage
-        try:
-            file_exists = await self.storage.file_exists(photo.storage_path)
-            if not file_exists:
-                logger.error(
-                    "Photo upload verification failed - file not found",
-                    extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
-                )
-                raise ValueError("업로드된 파일을 찾을 수 없습니다. 업로드를 다시 시도해주세요.")
-            
-            logger.info(
-                "Photo upload confirmed",
-                extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
-            )
-            
-            return photo
-            
-        except ValueError:
-            raise
-        except Exception as e:
-            logger.error(
-                "Photo upload verification failed",
-                exc_info=e,
-                extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
-            )
-            raise ValueError("파일 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+        file_exists = await self.storage.file_exists(photo.storage_path)
+        if not file_exists:
+            raise ValueError("업로드된 파일을 찾을 수 없습니다. 업로드를 다시 시도해주세요.")
+        
+        logger.info(
+            "Photo upload confirmed",
+            extra={"event": "photo_upload_confirm", "upload_id": photo_id, "photo_id": photo_id, "user_id": user_id}
+        )
+        
+        return photo

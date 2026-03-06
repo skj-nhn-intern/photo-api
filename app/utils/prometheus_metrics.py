@@ -37,6 +37,21 @@ db_errors_total = Counter(
     "Total database session/transaction errors",
     registry=REGISTRY,
 )
+
+# DB 연결 풀 대기 시간 (타임아웃 방지용)
+db_pool_wait_duration_seconds = Histogram(
+    "photo_api_db_pool_wait_duration_seconds",
+    "Time spent waiting for database connection from pool",
+    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+    registry=REGISTRY,
+)
+
+# DB 연결 타임아웃 발생 횟수
+db_pool_timeout_total = Counter(
+    "photo_api_db_pool_timeout_total",
+    "Total number of database connection pool timeouts",
+    registry=REGISTRY,
+)
 external_request_errors_total = Counter(
     "photo_api_external_request_errors_total",
     "Total external API request failures",
@@ -87,6 +102,7 @@ circuit_breaker_call_duration_seconds = Histogram(
 ready = Gauge(
     "photo_api_ready",
     "Application ready (1=up, 0=shutting down)",
+    ["region"],  # region: 배포 리전(REGION env). 일정 기간 총합·필터용
     registry=REGISTRY,
 )
 

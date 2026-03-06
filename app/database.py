@@ -23,7 +23,14 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.utils.prometheus_metrics import db_errors_total, REGISTRY, Gauge
+from app.utils.prometheus_metrics import (
+    db_errors_total,
+    db_pool_wait_duration_seconds,
+    db_pool_timeout_total,
+    REGISTRY,
+    Gauge,
+)
+from app.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 _logger = logging.getLogger("app.db")
 
@@ -45,26 +52,36 @@ settings = get_settings()
 # 느린 쿼리 임계값 (초)
 SLOW_QUERY_THRESHOLD = 1.0
 
+# DB Circuit Breaker (연결 실패 시 빠른 실패)
+# DB 연결이 실패하면 즉시 차단하여 전면 장애 방지
+_db_circuit_breaker = CircuitBreaker(
+    service_name="database",
+    failure_threshold=settings.database_circuit_breaker_failure_threshold,
+    success_threshold=2,  # HALF_OPEN에서 2번 성공 시 CLOSED
+    timeout=settings.database_circuit_breaker_timeout,
+) if settings.database_circuit_breaker_enabled else None
+
 # CI/이미지 검증 시 DATABASE_URL이 비어 있을 수 있음 — 빈 값이면 SQLite 기본 사용
 _database_url = (settings.database_url or "").strip()
 if not _database_url:
     _database_url = "sqlite+aiosqlite:///./photo_api.db"
 
-# Create async engine - echo는 항상 False (로그 노이즈 방지)
+# Create async engine - echo는 설정에 따라 (DATABASE_ECHO=true 시 SQL 로그)
+_db_echo = settings.database_echo
 if "sqlite" in _database_url:
     engine = create_async_engine(
         _database_url,
-        echo=False,
+        echo=_db_echo,
         poolclass=NullPool,
     )
 else:
     engine = create_async_engine(
         _database_url,
-        echo=False,  # SQL 로그 비활성화
-        pool_size=10,
-        max_overflow=30,
-        pool_timeout=30,
-        pool_recycle=1800,
+        echo=_db_echo,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout=settings.database_pool_timeout,
+        pool_recycle=settings.database_pool_recycle,
         pool_pre_ping=True,
     )
 
@@ -151,30 +168,72 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Dependency that provides a database session.
     Ensures proper cleanup of connections after each request.
+    
+    Circuit Breaker를 통해 DB 연결 실패 시 빠른 실패(fail-fast)를 제공하여
+    전면 장애를 방지합니다.
 
     Usage:
         @app.get("/items")
         async def get_items(db: AsyncSession = Depends(get_db)):
             ...
     """
-    async with async_session_maker() as session:
+    # Circuit Breaker를 통해 세션 획득 시도
+    async def _get_session():
+        wait_start = time.perf_counter()
         try:
-            yield session
-            await session.commit()
+            session = await async_session_maker()
+            wait_duration = time.perf_counter() - wait_start
+            db_pool_wait_duration_seconds.observe(wait_duration)
+            return session
         except Exception as e:
+            wait_duration = time.perf_counter() - wait_start
+            db_pool_wait_duration_seconds.observe(wait_duration)
+            
+            # 타임아웃 에러인지 확인
+            error_str = str(e).lower()
+            if "timeout" in error_str or "pool" in error_str:
+                db_pool_timeout_total.inc()
+            
+            raise
+    
+    # Circuit Breaker가 활성화되어 있으면 사용, 없으면 직접 호출
+    if _db_circuit_breaker is not None:
+        try:
+            session = await _db_circuit_breaker.call(_get_session)
+        except CircuitBreakerOpenError:
+            # Circuit Breaker가 OPEN 상태 - DB 연결 실패로 인한 전면 장애 방지
             db_errors_total.inc()
             _logger.error(
-                "DB error",
-                extra={
-                    "event": "db",
-                    "error_type": type(e).__name__,
-                    "error": str(e)[:200],  # 에러 메시지 앞 200자
-                },
+                "DB circuit breaker OPEN - database connection unavailable",
+                extra={"event": "db", "error_type": "CircuitBreakerOpen"},
+                exc_info=False,
             )
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+            raise ConnectionError(
+                "Database connection unavailable. Please try again later."
+            ) from None
+    else:
+        # Circuit Breaker 비활성화 시 직접 호출
+        session = await _get_session()
+    
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        db_errors_total.inc()
+        # DB 관련 간단한 정보만 로깅 (상세 정보는 전역 핸들러에서 처리)
+        _logger.error(
+            "DB transaction error",
+            extra={
+                "event": "db",
+                "error_type": type(e).__name__,
+                "error": str(e)[:200],  # 에러 메시지 앞 200자
+            },
+            exc_info=False,  # 스택 트레이스는 전역 핸들러에서 처리
+        )
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
 
 
 @asynccontextmanager
@@ -192,6 +251,7 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
         except Exception as e:
+            # DB 관련 간단한 정보만 로깅 (상세 정보는 전역 핸들러에서 처리)
             _logger.error(
                 "DB context error",
                 extra={
@@ -199,6 +259,7 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
                     "error_type": type(e).__name__,
                     "error": str(e)[:200],
                 },
+                exc_info=False,  # 스택 트레이스는 전역 핸들러에서 처리
             )
             await session.rollback()
             raise

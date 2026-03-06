@@ -15,9 +15,11 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import traceback
 
 from app.config import get_settings
 from app.database import init_db, close_db
@@ -35,6 +37,7 @@ from app.middlewares.rate_limit_middleware import setup_rate_limit_exception_han
 from app.middlewares.request_tracking_middleware import RequestTrackingMiddleware
 from app.services.nhn_logger import get_logger_service
 from app.utils.logger import setup_logging, get_request_id, log_error, log_info, log_warning
+from app.utils.client_ip import get_client_ip
 from app.utils.config_validator import validate_configuration
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.active_sessions_middleware import ActiveSessionsMiddleware
@@ -62,7 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             event="lifecycle",
             exc_info=True,
         )
-        ready.set(0)
+        ready.labels(region=(settings.region or "").strip() or "unknown").set(0)
         raise
     
     log_info(
@@ -72,7 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         environment=settings.environment.value,
     )
     await init_db()
-    ready.set(1)  # Health check 통과: 설정 검증·DB 초기화 완료 후
+    ready.labels(region=(settings.region or "").strip() or "unknown").set(1)  # Health check 통과: 설정 검증·DB 초기화 완료 후
     logger_service = get_logger_service()
     await logger_service.start()
 
@@ -84,7 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
 
     # Shutdown
-    ready.set(0)  # Health check 즉시 실패
+    ready.labels(region=(settings.region or "").strip() or "unknown").set(0)  # Health check 즉시 실패
     log_info("Application shutdown initiated", event="lifecycle")
     
     # 진행 중인 요청 완료 대기 (최대 30초)
@@ -183,19 +186,119 @@ app.add_middleware(ActiveSessionsMiddleware)
 app.add_middleware(RequestTrackingMiddleware)
 
 
+# ValueError를 HTTPException으로 변환
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """
+    ValueError를 400 Bad Request로 변환.
+    비즈니스 로직 검증 실패 시 사용.
+    """
+    rid = get_request_id()
+    client_ip = get_client_ip(request)
+    
+    log_warning(
+        "ValueError occurred",
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        error_code="VALIDATION_ERROR",
+        http_method=request.method,
+        http_path=request.url.path,
+        request_id=rid,
+        client_ip=client_ip,
+        event="exception",
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "detail": str(exc),
+            "request_id": rid,
+        },
+    )
+
+
 # Global exception handler
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    HTTPException 핸들러 - 이미 적절한 HTTP 응답이므로 그대로 반환.
+    4xx 에러는 WARNING, 5xx 에러는 ERROR로 로깅.
+    """
+    rid = get_request_id()
+    client_ip = get_client_ip(request)
+    user_agent = request.headers.get("user-agent")
+    
+    # 4xx는 클라이언트 오류 (WARNING), 5xx는 서버 오류 (ERROR)
+    if exc.status_code >= 500:
+        exceptions_total.inc()
+        log_error(
+            "HTTP exception occurred",
+            error_type=type(exc).__name__,
+            error_message=str(exc.detail),
+            error_code=f"HTTP_{exc.status_code}",
+            http_method=request.method,
+            http_path=request.url.path,
+            http_status=exc.status_code,
+            request_id=rid,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            query_params=dict(request.query_params) if request.query_params else None,
+            event="exception",
+            exc_info=False,
+        )
+    elif exc.status_code >= 400:
+        log_warning(
+            "Client error",
+            error_type=type(exc).__name__,
+            error_message=str(exc.detail),
+            error_code=f"HTTP_{exc.status_code}",
+            http_method=request.method,
+            http_path=request.url.path,
+            http_status=exc.status_code,
+            request_id=rid,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            event="exception",
+        )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "request_id": rid,
+        },
+        headers=exc.headers,
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """
-    Unhandled exception handler with structured logging.
+    전역 예외 핸들러 - 트러블슈팅을 위한 풍부한 정보 수집.
     
     모든 처리되지 않은 예외를 캐치하여:
-    - ERROR 로그 남김 (구조화된 포맷)
+    - 상세한 ERROR 로그 (스택 트레이스, 요청 컨텍스트 포함)
     - 500 응답 반환
     - Request ID 포함 (장애 추적용)
     """
     exceptions_total.inc()
     rid = get_request_id()
+    client_ip = get_client_ip(request)
+    user_agent = request.headers.get("user-agent")
+    
+    # 스택 트레이스 추출
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    stack_trace = "".join(tb_lines)
+    
+    # 요청 본문 일부 추출 (너무 크면 제한)
+    request_body = None
+    try:
+        if hasattr(request, "_body"):
+            body = request._body
+            if body and len(body) < 1000:  # 1KB 이하만 로깅
+                request_body = body.decode("utf-8", errors="ignore")[:500]
+    except Exception:
+        pass
     
     log_error(
         "Unhandled exception occurred",
@@ -204,7 +307,13 @@ async def global_exception_handler(request: Request, exc: Exception):
         error_code="INTERNAL_SERVER_ERROR",
         http_method=request.method,
         http_path=request.url.path,
+        http_status=500,
         request_id=rid,
+        client_ip=client_ip,
+        user_agent=user_agent,
+        query_params=dict(request.query_params) if request.query_params else None,
+        request_body_preview=request_body,
+        stack_trace=stack_trace,
         event="exception",
         exc_info=True,
     )

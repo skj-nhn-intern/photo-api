@@ -50,6 +50,38 @@ class Settings(BaseSettings):
     
     # Database (빈 문자열이면 기본값 사용 - CI/이미지 검증 시 .env에 없을 수 있음)
     database_url: str = Field(default="sqlite+aiosqlite:///./photo_api.db")
+    # SQL 문 로그 출력 (false로 끄면 노이즈 감소)
+    database_echo: bool = Field(default=True, description="Log SQL statements to app logger when True")
+    # Database connection pool settings
+    database_pool_size: int = Field(
+        default=20,
+        description="Database connection pool size (기본 연결 수)"
+    )
+    database_max_overflow: int = Field(
+        default=50,
+        description="Database connection pool max overflow (추가 연결 수, 총 연결 = pool_size + max_overflow)"
+    )
+    database_pool_timeout: int = Field(
+        default=30,
+        description="Database connection pool timeout (초, 연결 대기 시간)"
+    )
+    database_pool_recycle: int = Field(
+        default=1800,
+        description="Database connection pool recycle (초, 연결 재사용 시간)"
+    )
+    # Database Circuit Breaker settings
+    database_circuit_breaker_enabled: bool = Field(
+        default=True,
+        description="Enable circuit breaker for database connections (DB 장애 시 빠른 실패)"
+    )
+    database_circuit_breaker_failure_threshold: int = Field(
+        default=5,
+        description="DB Circuit Breaker failure threshold (연속 실패 횟수)"
+    )
+    database_circuit_breaker_timeout: float = Field(
+        default=30.0,
+        description="DB Circuit Breaker timeout (초, OPEN 상태 유지 시간)"
+    )
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -227,6 +259,24 @@ class Settings(BaseSettings):
     log_timezone: str = Field(default="Asia/Seoul", description="로그 timestamp 타임존 (IANA). 빈 문자열이면 UTC")
     # 로그 디렉터리. 비우면 /var/log/photo-api 사용, 쓰기 실패 시 ./logs 로 fallback
     log_dir: str = Field(default="", description="로그 파일 디렉터리 (비우면 /var/log/photo-api, 권한 없으면 ./logs)")
+    
+    # Uvicorn server settings (connection 처리량 향상)
+    uvicorn_workers: int = Field(
+        default=4,
+        description="Uvicorn worker processes 수 (멀티프로세싱). CPU 코어 수와 동일하게 설정 권장"
+    )
+    uvicorn_limit_concurrency: int = Field(
+        default=2000,
+        description="Uvicorn 최대 동시 연결 수 (concurrent connections)"
+    )
+    uvicorn_limit_max_requests: int = Field(
+        default=10000,
+        description="Uvicorn worker당 최대 요청 수 (메모리 누수 방지용, 0이면 무제한)"
+    )
+    uvicorn_timeout_keep_alive: int = Field(
+        default=5,
+        description="Uvicorn keep-alive 타임아웃 (초)"
+    )
     
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음
     loki_url: str | None = Field(default=None, description="Deprecated: use Promtail for logs")

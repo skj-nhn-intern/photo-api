@@ -50,7 +50,24 @@ else
 fi
 
 echo "[5/6] systemd 서비스 유닛 설치..."
-cat > /etc/systemd/system/photo-api.service << 'SVC'
+# uvicorn 설정값 읽기 (환경변수 또는 기본값)
+UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
+UVICORN_LIMIT_CONCURRENCY="${UVICORN_LIMIT_CONCURRENCY:-1000}"
+UVICORN_LIMIT_MAX_REQUESTS="${UVICORN_LIMIT_MAX_REQUESTS:-10000}"
+UVICORN_TIMEOUT_KEEP_ALIVE="${UVICORN_TIMEOUT_KEEP_ALIVE:-5}"
+
+# uvicorn 명령어 구성
+UVICORN_CMD="/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
+if [[ "$UVICORN_WORKERS" -gt 1 ]]; then
+  UVICORN_CMD="$UVICORN_CMD --workers $UVICORN_WORKERS"
+fi
+UVICORN_CMD="$UVICORN_CMD --limit-concurrency $UVICORN_LIMIT_CONCURRENCY"
+if [[ "$UVICORN_LIMIT_MAX_REQUESTS" -gt 0 ]]; then
+  UVICORN_CMD="$UVICORN_CMD --limit-max-requests $UVICORN_LIMIT_MAX_REQUESTS"
+fi
+UVICORN_CMD="$UVICORN_CMD --timeout-keep-alive $UVICORN_TIMEOUT_KEEP_ALIVE"
+
+cat > /etc/systemd/system/photo-api.service << SVC
 [Unit]
 Description=Photo API
 After=network.target
@@ -62,7 +79,7 @@ Group=photo-api
 WorkingDirectory=/opt/photo-api
 Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/opt/photo-api/.env
-ExecStart=/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+ExecStart=$UVICORN_CMD
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

@@ -186,14 +186,7 @@ async def get_shared_album_image(
             image_access_total.labels(access_type="shared", result="success").inc()
             image_access_duration_seconds.labels(access_type="shared", result="success").observe(duration)
             return RedirectResponse(url=cdn_url, status_code=status.HTTP_302_FOUND)
-    try:
-        file_content = await photo_service.download_photo(photo)
-    except Exception as e:
-        logger.error("Shared photo stream failed", exc_info=e, extra={"event": "share_stream", "photo_id": photo_id})
-        duration = time.perf_counter() - start
-        image_access_total.labels(access_type="shared", result="denied").inc()
-        image_access_duration_seconds.labels(access_type="shared", result="denied").observe(duration)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load photo")
+    file_content = await photo_service.download_photo(photo)
     duration = time.perf_counter() - start
     image_access_total.labels(access_type="shared", result="success").inc()
     image_access_duration_seconds.labels(access_type="shared", result="success").observe(duration)

@@ -139,23 +139,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             
             return response
             
-        except Exception as e:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            
-            # 예외 발생 시 → ERROR
-            log_error(
-                f"Request exception: {str(e)}",
-                error_type=type(e).__name__,
-                error_message=str(e),
-                http_method=request.method,
-                http_path=request.url.path,
-                duration_ms=duration_ms,
-                client_ip=client_ip,
-                user_agent=user_agent,
-                request_id=rid,
-                event="request",
-                exc_info=True,
-            )
-            
-            # 예외를 다시 발생시켜 global exception handler가 처리하도록 함
+        except Exception:
+            # 예외는 global exception handler에서 처리하므로 여기서는 재발생만 함
+            # 중복 로깅 방지를 위해 예외를 그대로 전파
             raise

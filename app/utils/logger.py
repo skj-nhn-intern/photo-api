@@ -561,7 +561,9 @@ def setup_logging() -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
     
-    # SQLAlchemy 로그 억제 (느린 쿼리는 app.db에서 별도 로깅)
+    # SQLAlchemy: database_echo=True면 SQL 문 출력, 아니면 WARNING만
+    if getattr(settings, "database_echo", True):
+        logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.INFO)
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
