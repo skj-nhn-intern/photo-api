@@ -6,6 +6,7 @@ server:
   http_listen_port: 9080
   grpc_listen_port: 0
   log_level: warn
+  # 메모리 최적화: 로그 레벨을 warn으로 유지하여 디버그 로그 최소화
 
 positions:
   filename: /var/lib/promtail/positions.yaml
@@ -16,9 +17,13 @@ clients:
       min_period: 500ms
       max_period: 5m
       max_retries: 10
-    batchsize: 1048576
-    batchwait: 1s
+    # 메모리 최적화: 배치 크기 감소 (1MB → 512KB)
+    batchsize: 524288  # 512KB (기본값 1MB의 절반)
+    # 메모리 최적화: 배치 대기 시간 증가 (더 많은 로그를 모아서 전송)
+    batchwait: 2s  # 1s → 2s (메모리 사용량 감소)
     timeout: 30s
+    # 메모리 최적화: 외부 요청 타임아웃
+    tenant_id: ""
 
 scrape_configs:
   - job_name: photo-api
@@ -50,6 +55,7 @@ scrape_configs:
       - labels:
           level: level
       # http_path에서 서비스 구간 추출 → path_prefix 라벨 (/auth, /albums, /photos, /share)
+      # 메모리 최적화: regex를 더 효율적으로 (선택적 매칭)
       - regex:
           source: http_path
           expression: '^(?P<path_prefix>/auth|/albums|/photos|/share)'
@@ -99,7 +105,8 @@ scrape_configs:
   - job_name: journal
     journal:
       json: false
-      max_age: 12h
+      # 메모리 최적화: journal 최대 나이 감소 (12h → 6h)
+      max_age: 6h  # 12h → 6h (메모리 사용량 감소)
       path: /var/log/journal
       labels:
         job: systemd

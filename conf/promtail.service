@@ -13,6 +13,11 @@ ExecStart=/bin/sh -c 'set -a; [ -r /opt/photo-api/.env ] && . /opt/photo-api/.en
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5
+# 메모리 최적화: 메모리 제한 설정 (512MB)
+MemoryMax=512M
+MemoryHigh=400M
+# CPU 제한 (선택적)
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

@@ -255,6 +255,11 @@ jobs:
           StandardError=journal
           SyslogIdentifier=photo-api
           ReadWritePaths=/var/log/photo-api
+          # 메모리 최적화: 메모리 제한 설정 (4GB RAM 환경 고려)
+          MemoryMax=3G
+          MemoryHigh=2.5G
+          # CPU 제한 (선택적, 4vCPU 환경 고려)
+          CPUQuota=300%
 
           [Install]
           WantedBy=multi-user.target

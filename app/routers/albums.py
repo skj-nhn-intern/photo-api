@@ -26,6 +26,8 @@ from app.utils.prometheus_metrics import (
     album_operations_total,
     album_photo_operations_total,
     share_link_creation_total,
+    album_creation_total,
+    share_link_creation_trend_total,
 )
 
 router = APIRouter(prefix="/albums", tags=["Albums"])
@@ -53,6 +55,7 @@ async def create_album(
     
     # 메트릭 수집: 앨범 생성 성공
     album_operations_total.labels(operation="create", result="success", access_type="authenticated").inc()
+    album_creation_total.inc()  # 앨범 생성량 추이
     
     photo_count = await album_service.get_album_photo_count(album.id)
     
@@ -344,6 +347,7 @@ async def create_share_link(
     
     # 메트릭 수집: 공유 링크 생성 성공
     share_link_creation_total.labels(result="success").inc()
+    share_link_creation_trend_total.inc()  # 공유링크 생성량 추이
     
     return ShareLinkResponse(
         id=share_link.id,

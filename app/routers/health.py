@@ -16,7 +16,7 @@ from app.database import engine
 from app.utils.prometheus_metrics import (
     REGISTRY,
     Gauge,
-    ready,
+    get_ready_value,
 )
 from app.services.nhn_object_storage import get_storage_service
 
@@ -43,7 +43,8 @@ async def health_check() -> Dict[str, str]:
     단순 Health Check (로드밸런서/프로브용).
     준비 상태(ready)만 보고, 200 또는 503을 반환합니다.
     """
-    if ready._value.get() == 0:
+    region = (settings.region or "").strip() or "unknown"
+    if get_ready_value(region) == 0:
         health_check_status.labels(check_type="fast").set(0)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -63,7 +64,8 @@ async def liveness_probe() -> Dict[str, str]:
     
     애플리케이션이 살아있는지만 확인합니다.
     """
-    if ready._value.get() == 0:
+    region = (settings.region or "").strip() or "unknown"
+    if get_ready_value(region) == 0:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Application is shutting down",
@@ -82,7 +84,8 @@ async def readiness_probe() -> Dict[str, str]:
     
     애플리케이션이 요청을 처리할 준비가 되었는지 확인합니다.
     """
-    if ready._value.get() == 0:
+    region = (settings.region or "").strip() or "unknown"
+    if get_ready_value(region) == 0:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Application is not ready",
@@ -138,7 +141,8 @@ async def detailed_health_check() -> Dict[str, Any]:
     }
     
     # Ready 상태 확인
-    if ready._value.get() == 0:
+    region = (settings.region or "").strip() or "unknown"
+    if get_ready_value(region) == 0:
         checks["status"] = "unhealthy"
         checks["checks"]["ready"] = {"status": "down", "error": "Application is shutting down"}
         health_check_status.labels(check_type="detailed").set(0)

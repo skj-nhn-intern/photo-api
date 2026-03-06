@@ -35,6 +35,7 @@ from app.utils.prometheus_metrics import (
     photo_upload_size_total,
     presigned_url_generation_total,
     photo_upload_confirm_total,
+    photo_creation_total,
 )
 import time
 from datetime import datetime, timezone, timedelta
@@ -265,6 +266,7 @@ async def confirm_photo_upload(
     photo_upload_confirm_total.labels(result="success").inc()
     photo_upload_total.labels(upload_method="presigned", result="success").inc()
     photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+    photo_creation_total.labels(upload_method="presigned").inc()  # 이미지 생성량 추이
 
     # Generate CDN URL for the uploaded photo
     photo_with_url = await photo_service.get_photo_with_url(photo)
@@ -363,6 +365,7 @@ async def upload_photo(
     photo_upload_total.labels(upload_method="direct", result="success").inc()
     photo_upload_file_size_bytes.labels(upload_method="direct").observe(len(content))
     photo_upload_size_total.labels(user_id=str(current_user.id)).inc(photo.file_size)
+    photo_creation_total.labels(upload_method="direct").inc()  # 이미지 생성량 추이
 
     # Generate CDN URL for the uploaded photo
     photo_with_url = await photo_service.get_photo_with_url(photo)

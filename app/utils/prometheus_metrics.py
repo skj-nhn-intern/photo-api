@@ -106,6 +106,25 @@ ready = Gauge(
     registry=REGISTRY,
 )
 
+
+def get_ready_value(region: str = "unknown") -> float:
+    """
+    Get the ready gauge value for a specific region.
+    
+    Args:
+        region: Region label value
+        
+    Returns:
+        Gauge value (1.0 = ready, 0.0 = not ready)
+    """
+    try:
+        # Prometheus client의 _Child 객체는 _value 속성을 가지고 있음
+        child = ready.labels(region=region)
+        return child._value.get()
+    except (AttributeError, KeyError):
+        # 라벨이 없거나 초기화되지 않은 경우 0 반환 (not ready)
+        return 0.0
+
 # --- Performance ---
 external_request_duration_seconds = Histogram(
     "photo_api_external_request_duration_seconds",
@@ -415,6 +434,43 @@ user_login_total = Counter(
     "photo_api_user_login_total",
     "Total login attempts",
     ["result"],  # result: success | failure
+    registry=REGISTRY,
+)
+
+# --- Business Trend Metrics (추이 추적용) ---
+# 앨범 생성량 추이
+album_creation_total = Counter(
+    "photo_api_album_creation_total",
+    "Total number of albums created (for trend analysis)",
+    registry=REGISTRY,
+)
+
+# 사용자 접속 추이 (성공한 로그인만)
+user_access_total = Counter(
+    "photo_api_user_access_total",
+    "Total number of successful user logins (for access trend analysis)",
+    registry=REGISTRY,
+)
+
+# 신규 사용자 추이 (성공한 가입만)
+new_user_registration_total = Counter(
+    "photo_api_new_user_registration_total",
+    "Total number of successful user registrations (for new user trend analysis)",
+    registry=REGISTRY,
+)
+
+# 공유링크 생성량 추이 (성공한 생성만)
+share_link_creation_trend_total = Counter(
+    "photo_api_share_link_creation_trend_total",
+    "Total number of successfully created share links (for trend analysis)",
+    registry=REGISTRY,
+)
+
+# 이미지 생성량 추이 (직접 업로드 + presigned URL 확인)
+photo_creation_total = Counter(
+    "photo_api_photo_creation_total",
+    "Total number of photos created/uploaded (for trend analysis)",
+    ["upload_method"],  # upload_method: direct | presigned
     registry=REGISTRY,
 )
 jwt_token_validation_total = Counter(

@@ -12,6 +12,8 @@ from app.utils.prometheus_metrics import (
     users_total,
     user_registration_total,
     user_login_total,
+    user_access_total,
+    new_user_registration_total,
 )
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
@@ -55,6 +57,7 @@ async def register(
         users_total.labels(status="total").inc()
         users_total.labels(status="active").inc()
         user_registration_total.labels(result="success").inc()
+        new_user_registration_total.inc()  # 신규 사용자 추이
 
         return UserResponse.model_validate(user)
     except ValueError as e:
@@ -96,6 +99,9 @@ async def login(
     result = "success" if token else "failure"
     login_duration_seconds.labels(result=result).observe(duration)
     user_login_total.labels(result=result).inc()
+    
+    if token:
+        user_access_total.inc()  # 사용자 접속 추이 (성공한 로그인만)
 
     if not token:
         # 잠재적 문제 로깅 (WARN 레벨) - 무차별 대입 공격 탐지 가능

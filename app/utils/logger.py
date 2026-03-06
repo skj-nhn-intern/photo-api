@@ -525,8 +525,10 @@ def setup_logging() -> None:
 
             fh = FlushingRotatingFileHandler(
                 app_log_file,
-                maxBytes=10 * 1024 * 1024,
-                backupCount=5,
+                # 메모리 최적화: 로그 파일 크기 감소 (10MB → 5MB)
+                maxBytes=5 * 1024 * 1024,  # 5MB
+                # 메모리 최적화: 백업 파일 수 감소 (5 → 3)
+                backupCount=3,
                 encoding="utf-8",
             )
             fh.setLevel(logging.INFO)
@@ -535,8 +537,10 @@ def setup_logging() -> None:
 
             eh = FlushingRotatingFileHandler(
                 error_log_file,
-                maxBytes=10 * 1024 * 1024,
-                backupCount=5,
+                # 메모리 최적화: 에러 로그 파일 크기 감소 (10MB → 5MB)
+                maxBytes=5 * 1024 * 1024,  # 5MB
+                # 메모리 최적화: 백업 파일 수 감소 (5 → 3)
+                backupCount=3,
                 encoding="utf-8",
             )
             eh.setLevel(logging.ERROR)

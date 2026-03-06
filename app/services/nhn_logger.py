@@ -76,9 +76,12 @@ class NHNLoggerService:
     이 서비스는 NHN Cloud 전송만 담당.
     """
     
-    MAX_QUEUE_SIZE = 10000
-    BATCH_SIZE = 100
-    FLUSH_INTERVAL = 5.0  # seconds
+    # 메모리 최적화: 큐 크기 감소 (10000 → 5000)
+    MAX_QUEUE_SIZE = 5000
+    # 메모리 최적화: 배치 크기 증가 (100 → 200, 더 적은 배치 전송으로 메모리 효율 향상)
+    BATCH_SIZE = 200
+    # 메모리 최적화: 플러시 간격 증가 (5s → 10s, 더 많은 로그를 모아서 전송)
+    FLUSH_INTERVAL = 10.0  # seconds
     MAX_RETRIES = 3
     
     def __init__(self):
