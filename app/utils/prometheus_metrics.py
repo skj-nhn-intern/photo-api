@@ -52,6 +52,21 @@ db_pool_timeout_total = Counter(
     "Total number of database connection pool timeouts",
     registry=REGISTRY,
 )
+
+# 느린 쿼리 추적 (slow query logging 대체)
+db_slow_queries_total = Counter(
+    "photo_api_db_slow_queries_total",
+    "Total number of slow queries (exceeding threshold)",
+    registry=REGISTRY,
+)
+
+# 쿼리 실행 시간 히스토그램
+db_query_duration_seconds = Histogram(
+    "photo_api_db_query_duration_seconds",
+    "Database query execution duration in seconds",
+    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
+    registry=REGISTRY,
+)
 external_request_errors_total = Counter(
     "photo_api_external_request_errors_total",
     "Total external API request failures",

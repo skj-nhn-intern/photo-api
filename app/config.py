@@ -69,6 +69,15 @@ class Settings(BaseSettings):
         default=1800,
         description="Database connection pool recycle (초, 연결 재사용 시간)"
     )
+    # Slow query logging (메모리 최적화: 비활성화 권장)
+    database_slow_query_logging_enabled: bool = Field(
+        default=False,
+        description="Enable slow query logging (메모리 사용량 증가, Prometheus 메트릭으로 대체 권장)"
+    )
+    database_slow_query_threshold: float = Field(
+        default=1.0,
+        description="Slow query threshold in seconds (1초 이상 쿼리)"
+    )
     # Database Circuit Breaker settings
     database_circuit_breaker_enabled: bool = Field(
         default=True,

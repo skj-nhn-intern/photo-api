@@ -27,6 +27,8 @@ from app.utils.prometheus_metrics import (
     db_errors_total,
     db_pool_wait_duration_seconds,
     db_pool_timeout_total,
+    db_slow_queries_total,
+    db_query_duration_seconds,
     REGISTRY,
     Gauge,
 )
@@ -50,7 +52,8 @@ db_pool_waiting_requests = Gauge(
 settings = get_settings()
 
 # 느린 쿼리 임계값 (초)
-SLOW_QUERY_THRESHOLD = 1.0
+SLOW_QUERY_THRESHOLD = settings.database_slow_query_threshold
+SLOW_QUERY_LOGGING_ENABLED = settings.database_slow_query_logging_enabled
 
 # DB Circuit Breaker (연결 실패 시 빠른 실패)
 # DB 연결이 실패하면 즉시 차단하여 전면 장애 방지
@@ -86,9 +89,11 @@ else:
     )
 
 
-# 느린 쿼리 로깅
+# 느린 쿼리 추적 (로깅 또는 메트릭)
+# 메모리 최적화: 로깅은 비활성화하고 Prometheus 메트릭으로만 추적 권장
 @event.listens_for(engine.sync_engine, "before_cursor_execute")
 def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    # 메트릭 수집을 위해 항상 시간 측정 (메모리 오버헤드 최소)
     conn.info.setdefault("query_start_time", []).append(time.perf_counter())
 
 
@@ -97,13 +102,20 @@ def _after_cursor_execute(conn, cursor, statement, parameters, context, executem
     start_times = conn.info.get("query_start_time")
     if start_times:
         elapsed = time.perf_counter() - start_times.pop()
+        # 메트릭 수집 (항상 활성화 - 메모리 효율적)
+        db_query_duration_seconds.observe(elapsed)
+        
         if elapsed >= SLOW_QUERY_THRESHOLD:
-            # 쿼리 앞 100자만 로깅 (보안/가독성)
-            short_stmt = statement[:100] + "..." if len(statement) > 100 else statement
-            _logger.warning(
-                "Slow query",
-                extra={"event": "db", "ms": round(elapsed * 1000), "query": short_stmt},
-            )
+            db_slow_queries_total.inc()
+            
+            # 로깅은 설정에 따라 (메모리 최적화: 기본 비활성화)
+            if SLOW_QUERY_LOGGING_ENABLED:
+                # 쿼리 앞 100자만 로깅 (보안/가독성)
+                short_stmt = statement[:100] + "..." if len(statement) > 100 else statement
+                _logger.warning(
+                    "Slow query",
+                    extra={"event": "db", "ms": round(elapsed * 1000), "query": short_stmt},
+                )
 
 
 # DB 연결 풀 모니터링 (PostgreSQL/MySQL만, SQLite는 제외)
@@ -178,13 +190,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             ...
     """
     # Circuit Breaker를 통해 세션 획득 시도
-    async def _get_session():
+    # async_session_maker()는 context manager를 반환하므로 async with를 사용해야 함
+    async def _acquire_session():
+        """세션 획득 (연결 풀에서 연결을 가져오는 시점에 Circuit Breaker 적용)"""
         wait_start = time.perf_counter()
         try:
-            session = await async_session_maker()
+            # async_session_maker()는 context manager를 반환
+            # __aenter__를 호출하여 세션 획득 (연결 풀에서 연결을 가져옴)
+            cm = async_session_maker()
+            session = await cm.__aenter__()
             wait_duration = time.perf_counter() - wait_start
             db_pool_wait_duration_seconds.observe(wait_duration)
-            return session
+            return session, cm  # session과 context manager를 함께 반환
         except Exception as e:
             wait_duration = time.perf_counter() - wait_start
             db_pool_wait_duration_seconds.observe(wait_duration)
@@ -199,7 +216,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     # Circuit Breaker가 활성화되어 있으면 사용, 없으면 직접 호출
     if _db_circuit_breaker is not None:
         try:
-            session = await _db_circuit_breaker.call(_get_session)
+            session, cm = await _db_circuit_breaker.call(_acquire_session)
         except CircuitBreakerOpenError:
             # Circuit Breaker가 OPEN 상태 - DB 연결 실패로 인한 전면 장애 방지
             db_errors_total.inc()
@@ -213,7 +230,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             ) from None
     else:
         # Circuit Breaker 비활성화 시 직접 호출
-        session = await _get_session()
+        session, cm = await _acquire_session()
     
     try:
         yield session
@@ -233,7 +250,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         await session.rollback()
         raise
     finally:
-        await session.close()
+        # context manager의 __aexit__를 호출하여 세션 정리
+        await cm.__aexit__(None, None, None)
 
 
 @asynccontextmanager
