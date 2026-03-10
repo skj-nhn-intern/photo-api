@@ -139,8 +139,8 @@ curl http://localhost:8000/metrics | grep -E "(db_pool|uvicorn)"
 ### 1. 데이터베이스 연결 풀 모니터링
 
 Prometheus 메트릭:
-- `photo_api_db_pool_active_connections`: 활성 DB 연결 수
-- `photo_api_db_pool_waiting_requests`: 연결 대기 중인 요청 수
+- `photo_api_db_pool_active_connections`: 활성 DB 연결 수 (pool_size + overflow, 음수 시 0으로 클램프)
+- `photo_api_db_pool_waiting_requests`: overflow로 생성된 연결 수 (풀 초과 연결 수, **대기 중인 요청 수 아님**. 내부 이슈로 음수 나올 수 있어 0 미만은 0으로 클램프)
 
 ### 2. Uvicorn 연결 모니터링
 

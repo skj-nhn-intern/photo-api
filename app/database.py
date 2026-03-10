@@ -51,9 +51,8 @@ db_pool_waiting_requests = Gauge(
 
 settings = get_settings()
 
-# 느린 쿼리 임계값 (초)
+# 느린 쿼리: 메트릭만 수집 (db_slow_queries_total). 로그는 사용하지 않음.
 SLOW_QUERY_THRESHOLD = settings.database_slow_query_threshold
-SLOW_QUERY_LOGGING_ENABLED = settings.database_slow_query_logging_enabled
 
 # DB Circuit Breaker (연결 실패 시 빠른 실패)
 # DB 연결이 실패하면 즉시 차단하여 전면 장애 방지
@@ -107,15 +106,6 @@ def _after_cursor_execute(conn, cursor, statement, parameters, context, executem
         
         if elapsed >= SLOW_QUERY_THRESHOLD:
             db_slow_queries_total.inc()
-            
-            # 로깅은 설정에 따라 (메모리 최적화: 기본 비활성화)
-            if SLOW_QUERY_LOGGING_ENABLED:
-                # 쿼리 앞 100자만 로깅 (보안/가독성)
-                short_stmt = statement[:100] + "..." if len(statement) > 100 else statement
-                _logger.warning(
-                    "Slow query",
-                    extra={"event": "db", "ms": round(elapsed * 1000), "query": short_stmt},
-                )
 
 
 # DB 연결 풀 모니터링 (PostgreSQL/MySQL만, SQLite는 제외)
@@ -132,10 +122,12 @@ if "sqlite" not in _database_url and hasattr(engine, "sync_engine") and hasattr(
         if not hasattr(pool, "overflow"):
             return
         overflow = pool.overflow()
+        # SQLAlchemy 풀 내부 상태/스레딩 이슈로 overflow()가 음수로 나올 수 있음 → 0 미만이면 0으로 클램프
+        overflow_safe = max(0, overflow) if isinstance(overflow, (int, float)) else 0
         pool_size = getattr(pool, "_pool_maxsize", 10)
-        total = pool_size + overflow
-        db_pool_active_connections.set(total)
-        db_pool_waiting_requests.set(overflow)  # overflow 개수(초과 연결 수)
+        total = pool_size + overflow_safe
+        db_pool_active_connections.set(max(0, total))
+        db_pool_waiting_requests.set(overflow_safe)  # overflow 개수(초과 연결 수, 음수 시 0)
 
     @event.listens_for(engine.sync_engine, "connect")
     def _on_connect(dbapi_conn, connection_record):

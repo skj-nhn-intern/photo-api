@@ -29,7 +29,20 @@ logger = logging.getLogger(__name__)
 # --- Stability ---
 exceptions_total = Counter(
     "photo_api_exceptions_total",
-    "Total unhandled exceptions",
+    "Total unhandled exceptions and server errors (5xx), by exception type",
+    ["exception_type"],  # e.g. HTTPException_500, ValueError, ConnectionError
+    registry=REGISTRY,
+)
+# 5xx 응답 횟수 (안정성 대시보드용)
+http_5xx_total = Counter(
+    "photo_api_http_5xx_total",
+    "Total HTTP 5xx server error responses",
+    registry=REGISTRY,
+)
+# 요청 바디/파라미터 검증 실패(422) 횟수 — 클라이언트 입력 문제와 서버 안정성 구분용
+validation_errors_total = Counter(
+    "photo_api_validation_errors_total",
+    "Total request validation errors (422, e.g. RequestValidationError)",
     registry=REGISTRY,
 )
 db_errors_total = Counter(
@@ -53,7 +66,7 @@ db_pool_timeout_total = Counter(
     registry=REGISTRY,
 )
 
-# 느린 쿼리 추적 (slow query logging 대체)
+# 느린 쿼리 추적 — 메트릭만 수집(로그 없음). db_query_duration_seconds 히스토그램으로 지연 분석 가능.
 db_slow_queries_total = Counter(
     "photo_api_db_slow_queries_total",
     "Total number of slow queries (exceeding threshold)",
@@ -118,6 +131,13 @@ ready = Gauge(
     "photo_api_ready",
     "Application ready (1=up, 0=shutting down)",
     ["region"],  # region: 배포 리전(REGION env). 일정 기간 총합·필터용
+    registry=REGISTRY,
+)
+
+# 앱 기동 완료 시각 (Unix 초). 업타임 계산용: uptime_seconds = time() - photo_api_app_start_time_seconds
+app_start_time_seconds = Gauge(
+    "photo_api_app_start_time_seconds",
+    "Unix timestamp when application became ready (for uptime: time() - this value)",
     registry=REGISTRY,
 )
 

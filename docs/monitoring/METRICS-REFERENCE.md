@@ -22,6 +22,7 @@
 13. [DB 연결 풀](#13-db-연결-풀)
 14. [헬스체크](#14-헬스체크)
 15. [앱 식별 (setup 시 등록)](#15-앱-식별)
+16. [Instrumentator (FastAPI)](#instrumentator-fastapi-메트릭) · [FastAPI 상태 모니터링 요약](#fastapi-상태-모니터링-요약)
 
 ---
 
@@ -29,10 +30,14 @@
 
 | 메트릭 이름 | 타입 | 라벨 | 설명 | 갱신 시점 |
 |-------------|------|------|------|------------|
-| `photo_api_exceptions_total` | Counter | — | 처리되지 않은 예외 발생 횟수 | 전역 예외 핸들러에서 `.inc()` |
+| `photo_api_exceptions_total` | Counter | `exception_type` | 처리되지 않은 예외 및 서버 오류(5xx) 횟수. exception_type 예: HTTPException_5xx, ValueError, ConnectionError | HTTPException(5xx) 시 `.labels(exception_type="HTTPException_5xx").inc()`, 전역 Exception 핸들러 시 `.labels(exception_type=타입명).inc()` |
+| `photo_api_http_5xx_total` | Counter | — | HTTP 5xx 응답 횟수 (안정성 대시보드용) | HTTPException(status≥500), 전역 Exception 핸들러 응답 시 `.inc()` |
+| `photo_api_validation_errors_total` | Counter | — | 요청 검증 실패(422) 횟수. RequestValidationError. 클라이언트 입력 문제와 서버 안정성 구분용 | RequestValidationError 핸들러에서 `.inc()` |
 | `photo_api_db_errors_total` | Counter | — | DB 세션/트랜잭션 에러 횟수 | `get_db()` 예외 시 `.inc()` |
 | `photo_api_external_request_errors_total` | Counter | `service` | 외부 API 호출 실패 횟수. service: `obs_api_server`, `cdn_api_server`, `log_api_server` | `record_external_request(service)` 예외 시 |
 | `photo_api_external_request_total` | Counter | `service`, `status` | 외부 API 요청 수. status: `success` \| `failure` | `record_external_request()` 성공/실패 시 |
+
+**Slow query:** `photo_api_db_slow_queries_total`(임계 초과 쿼리 횟수), `photo_api_db_query_duration_seconds`(쿼리 지연 히스토그램)는 DB 쿼리 안정성·성능 추적용입니다. 느린 쿼리 **로그는 사용하지 않으며**, 메트릭만 수집합니다.
 
 ---
 
@@ -41,6 +46,7 @@
 | 메트릭 이름 | 타입 | 라벨 | 설명 | 갱신 시점 |
 |-------------|------|------|------|------------|
 | `photo_api_ready` | Gauge | `region` | 앱 준비 상태. 1=트래픽 수신 가능, 0=종료 중. region=REGION env | lifespan: startup 성공 시 1, 검증 실패/종료 시 0 |
+| `photo_api_app_start_time_seconds` | Gauge | — | 앱이 ready 된 시각(Unix 초). 업타임 계산: `time() - photo_api_app_start_time_seconds` | lifespan: init_db 완료 후 1회 설정 |
 
 ---
 
@@ -202,8 +208,10 @@
 
 | 메트릭 이름 | 타입 | 라벨 | 설명 | 갱신 시점 |
 |-------------|------|------|------|------------|
-| `photo_api_db_pool_active_connections` | Gauge | — | 현재 존재하는 DB 연결 수 = pool_size + overflow. 체크아웃된 연결 포함 | connect/checkout/checkin 이벤트 시 |
-| `photo_api_db_pool_waiting_requests` | Gauge | — | 현재 overflow로 생성된 연결 수 (대기 요청 수 아님) | 동일 |
+| `photo_api_db_pool_active_connections` | Gauge | — | 현재 존재하는 DB 연결 수 = pool_size + overflow. 체크아웃된 연결 포함. (내부 상태 오류 시 0 미만은 0으로 클램프) | connect/checkout/checkin 이벤트 시 |
+| `photo_api_db_pool_waiting_requests` | Gauge | — | 현재 overflow로 생성된 연결 수(초과 연결 수). **대기 요청 수 아님.** SQLAlchemy 풀 내부 이슈로 음수가 나올 수 있어 0 미만은 0으로 클램프함 | 동일 |
+
+**참고:** 그래프에서 "DB 커넥션 대기 수"가 음수(-38, -34 등)로 보인다면, 이 메트릭에 `pool.overflow()` 값을 넣고 있는데 SQLAlchemy QueuePool이 스레딩/동기화 이슈로 음수를 반환한 경우입니다. 코드에서 `max(0, overflow)`로 클램프하여 음수는 더 이상 노출되지 않습니다.
 
 ---
 
@@ -253,6 +261,30 @@
 - `http_request_duration_seconds` — 요청 지연 Histogram
 
 이 문서의 “Photo API가 만든 메트릭”에는 위 자동 메트릭은 제외했습니다.
+
+---
+
+## FastAPI 상태 모니터링 요약
+
+FastAPI/앱 상태를 보기 위해 사용할 수 있는 지표는 다음과 같습니다.
+
+| 용도 | 메트릭 | 비고 |
+|------|--------|------|
+| **준비 여부** | `photo_api_ready` | 1=수신 가능, 0=종료 중. LB/헬스체크용 |
+| **업타임** | `photo_api_app_start_time_seconds` | Grafana: `time() - photo_api_app_start_time_seconds` |
+| **처리 중 요청 수** | `photo_api_in_flight_requests` | Graceful shutdown·과부하 판단 |
+| **인증된 동시 요청** | `photo_api_active_sessions` | 동시 로그인 사용자 규모 |
+| **앱 식별** | `photo_api_app_info` | node, version, environment, region |
+| **요청 수·지연** | `http_requests_total`, `http_request_duration_seconds` | Instrumentator 자동 수집 |
+| **미처리 예외(유형별)** | `photo_api_exceptions_total` (라벨: `exception_type`) | 안정성 |
+| **5xx 횟수** | `photo_api_http_5xx_total` | 안정성 |
+| **검증 실패(422)** | `photo_api_validation_errors_total` | 클라이언트 입력 vs 서버 안정성 구분 |
+
+**추가 권장 사항 (선택):**
+
+- **백그라운드 태스크 상태**: `business_metrics_loop`, `pushgateway_loop` 등이 살아 있는지는 현재 메트릭으로는 직접 확인 불가. 필요 시 주기적으로 갱신되는 Gauge(예: 비즈니스 메트릭의 마지막 갱신 시각)를 두어 간접 확인할 수 있음.
+- **Worker 구분**: 멀티 워커 시 각 프로세스가 자체 `/metrics`를 노출하므로, `photo_api_app_info`의 `node`(또는 instance)로 구분 가능.
+- **업타임 대시보드**: `photo_api_app_start_time_seconds`를 사용해 "마지막 재기동 시각", "업타임(초)" 패널을 만들 수 있음.
 
 ---
 

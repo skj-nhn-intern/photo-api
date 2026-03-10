@@ -27,7 +27,10 @@ from app.routers import auth_router, photos_router, albums_router, share_router
 from app.routers import health as health_router
 from app.utils.prometheus_metrics import (
     exceptions_total,
+    http_5xx_total,
+    validation_errors_total,
     ready,
+    app_start_time_seconds,
     setup_prometheus,
     pushgateway_loop,
     business_metrics_loop,
@@ -76,6 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     await init_db()
     ready.labels(region=(settings.region or "").strip() or "unknown").set(1)  # Health check 통과: 설정 검증·DB 초기화 완료 후
+    app_start_time_seconds.set(int(time.time()))  # FastAPI 상태 모니터링: 업타임 계산용
     logger_service = get_logger_service()
     await logger_service.start()
 
@@ -217,6 +221,30 @@ async def value_error_handler(request: Request, exc: ValueError):
     )
 
 
+# 요청 바디/파라미터 검증 실패 (422) — 클라이언트 입력 문제, 서버 안정성과 구분
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+    """RequestValidationError → 422, validation_errors_total 증가."""
+    validation_errors_total.inc()
+    rid = get_request_id()
+    log_warning(
+        "Request validation failed",
+        error_type=type(exc).__name__,
+        error_message=str(exc.errors()),
+        http_method=request.method,
+        http_path=request.url.path,
+        request_id=rid,
+        event="validation",
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": exc.errors(),
+            "request_id": rid,
+        },
+    )
+
+
 # Global exception handler
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -230,7 +258,8 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     
     # 4xx는 클라이언트 오류 (WARNING), 5xx는 서버 오류 (ERROR)
     if exc.status_code >= 500:
-        exceptions_total.inc()
+        exceptions_total.labels(exception_type="HTTPException_5xx").inc()
+        http_5xx_total.inc()
         log_error(
             "HTTP exception occurred",
             error_type=type(exc).__name__,
@@ -281,7 +310,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     - 500 응답 반환
     - Request ID 포함 (장애 추적용)
     """
-    exceptions_total.inc()
+    exc_type = type(exc).__name__
+    exceptions_total.labels(exception_type=exc_type).inc()
+    http_5xx_total.inc()
     rid = get_request_id()
     client_ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
