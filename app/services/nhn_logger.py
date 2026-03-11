@@ -23,6 +23,7 @@ import httpx
 from app.config import get_settings
 from app.utils.prometheus_metrics import (
     external_request_errors_total,
+    external_request_timeouts_total,
     record_external_request,
 )
 
@@ -222,6 +223,9 @@ class NHNLoggerService:
                     if attempt < self.MAX_RETRIES - 1:
                         await asyncio.sleep(1 * (attempt + 1))
                         continue
+                    # Final attempt failed — 타임아웃이면 전용 메트릭 증가
+                    if isinstance(e, (httpx.TimeoutException, asyncio.TimeoutError)):
+                        external_request_timeouts_total.labels(service="log_api_server").inc()
                     # Final attempt failed, logs will be lost — 서버에 기록 (NHN 로거 사용 금지, 재귀 방지)
                     external_request_errors_total.labels(service="log_api_server").inc()
                     logging.getLogger("app").error(

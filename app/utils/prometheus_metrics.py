@@ -87,6 +87,14 @@ external_request_errors_total = Counter(
     registry=REGISTRY,
 )
 
+# 외부 서비스 타임아웃 횟수 (에러의 부분집합. service별 타임아웃 모니터링용)
+external_request_timeouts_total = Counter(
+    "photo_api_external_request_timeouts_total",
+    "Total external API request timeouts (subset of errors)",
+    ["service"],
+    registry=REGISTRY,
+)
+
 # 외부 서비스 요청 수 (성공/실패 구분) — 에러율·성공률 계산용
 external_request_total = Counter(
     "photo_api_external_request_total",
@@ -836,13 +844,21 @@ def _node_identity() -> str:
 @asynccontextmanager
 async def record_external_request(service: str) -> AsyncGenerator[None, None]:
     """
-    Context manager to record external request duration, total count, and errors.
+    Context manager to record external request duration, total count, errors, and timeouts.
     Use around NHN Storage/CDN/Log HTTP calls.
+    Timeout exceptions (httpx.TimeoutException, asyncio.TimeoutError) are counted in
+    both external_request_timeouts_total and external_request_errors_total.
     """
     start = time.perf_counter()
     exc_raised = None
     try:
         yield
+    except (httpx.TimeoutException, asyncio.TimeoutError) as e:
+        exc_raised = e
+        external_request_timeouts_total.labels(service=service).inc()
+        external_request_errors_total.labels(service=service).inc()
+        external_request_total.labels(service=service, status="failure").inc()
+        raise
     except Exception as e:
         exc_raised = e
         external_request_errors_total.labels(service=service).inc()

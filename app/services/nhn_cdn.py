@@ -7,7 +7,7 @@ https://docs.nhncloud.com/ko/Contents%20Delivery/CDN/ko/api-guide-v2.0/#auth-tok
 """
 import logging
 import time
-from typing import Optional, List
+from typing import Optional
 
 import httpx
 
@@ -35,9 +35,13 @@ class NHNCDNService:
     # NHN Cloud CDN API 엔드포인트
     CDN_API_URL = "https://cdn.api.nhncloudservice.com"
     
+    # 실패한 경로를 일정 시간 동안 재시도하지 않음 (불필요한 CDN API 호출·에러 카운트 방지)
+    FAILURE_CACHE_SECONDS = 60
+
     def __init__(self):
         self.settings = get_settings()
         self._token_cache: dict[str, tuple[str, float]] = {}  # path -> (token, expire_time)
+        self._failure_cache: dict[str, float] = {}  # path -> expire_at (until when to skip API call)
     
     async def _request_auth_token(
         self,
@@ -86,14 +90,23 @@ class NHNCDNService:
         if self.settings.nhn_cdn_secret_key:
             headers["Authorization"] = self.settings.nhn_cdn_secret_key
         
+        timeout = self.settings.cdn_timeout
         try:
             async with record_external_request("cdn_api_server"):
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(url, json=payload, headers=headers)
 
                     data = response.json()
                     if data.get("header", {}).get("isSuccessful"):
                         token = data.get("authToken", {}).get("singlePathToken")
+                        if not token:
+                            logger.error(
+                                "CDN auth token response missing singlePathToken",
+                                extra={"event": "cdn_token", "path": path},
+                            )
+                            external_request_errors_total.labels(service="cdn_api_server").inc()
+                            cdn_auth_token_requests_total.labels(result="failure", access_type=access_type).inc()
+                            return None
                         cdn_auth_token_requests_total.labels(result="success", access_type=access_type).inc()
                         return token
                     else:
@@ -105,6 +118,14 @@ class NHNCDNService:
                         cdn_auth_token_requests_total.labels(result="failure", access_type=access_type).inc()
                         return None
 
+        except httpx.TimeoutException:
+            logger.error(
+                "CDN auth token API timeout",
+                extra={"event": "cdn_token", "path": path},
+            )
+            # record_external_request already incremented external_request_timeouts_total and external_request_errors_total
+            cdn_auth_token_requests_total.labels(result="failure", access_type=access_type).inc()
+            return None
         except httpx.HTTPError as e:
             logger.error("CDN auth token API error", exc_info=e, extra={"event": "cdn_token"})
             external_request_errors_total.labels(service="cdn_api_server").inc()
@@ -163,6 +184,15 @@ class NHNCDNService:
             cached_token, expire_time = self._token_cache[cache_key]
             if time.time() < expire_time - 60:  # 1분 여유
                 return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={cached_token}"
+        # 실패 캐시: 최근에 토큰 발급이 실패한 경로는 짧은 시간 동안 API 재호출하지 않음 (에러 카운트·API 부하 감소)
+        now = time.time()
+        self._failure_cache = {k: v for k, v in self._failure_cache.items() if v > now}
+        if cache_key in self._failure_cache:
+            logger.debug(
+                "CDN token skipped (recent failure cached)",
+                extra={"event": "cdn_token", "path": cdn_path},
+            )
+            return None
         
         # Auth Token 생성 (CDN API 호출)
         token = await self._request_auth_token(cdn_path, expires_in, access_type=access_type)
@@ -170,6 +200,8 @@ class NHNCDNService:
         if token:
             self._token_cache[cache_key] = (token, time.time() + expires_in)
             return f"https://{self.settings.nhn_cdn_domain}{cdn_path}?token={token}"
+        # 토큰 실패 시 일정 시간 동안 해당 경로에 대해 API 재호출 스킵 (불필요한 에러 누적 방지)
+        self._failure_cache[cache_key] = time.time() + self.FAILURE_CACHE_SECONDS
         # 토큰 실패 시 None → 라우터에서 302 대신 백엔드 스트리밍 (SignatureDoesNotMatch/403 방지)
         logger.warning(
             "CDN auth token failed, caller should stream from backend",

@@ -167,31 +167,50 @@ def resolve_flavor_uuid(compute_url: str, headers: dict, flavor_ref: str) -> str
 
 def resolve_image_uuid(region: str, token: str, image_ref: str) -> str:
     """image_ref가 UUID면 그대로, 아니면 이름으로 Public 이미지 조회해 UUID 반환.
-    동일 이름이 여러 개면 created_at 최신 순으로 하나 선택."""
+    동일 이름이 여러 개면 created_at 최신 순으로 하나 선택.
+    Public 이미지가 많을 수 있으므로 페이지네이션(marker)으로 전체 조회."""
+    image_ref = (image_ref or "").strip()
     if _is_uuid(image_ref):
-        return image_ref.strip()
+        return image_ref
     region_lower = region.strip().lower()
     image_url = f"https://{region_lower}-api-image-infrastructure.nhncloudservice.com"
     headers = {"X-Auth-Token": token}
-    r = requests.get(
-        f"{image_url}/v2/images",
-        headers=headers,
-        params={"visibility": "public", "limit": 100},
-    )
-    r.raise_for_status()
-    body = r.json()
-    images = body.get("images") or []
-    name_lower = image_ref.strip().lower()
-    exact = [img for img in images if (img.get("name") or "").lower() == name_lower]
+    name_lower = image_ref.lower()
+    all_images = []
+    marker = None
+    while True:
+        params = {"visibility": "public", "limit": 100}
+        if marker:
+            params["marker"] = marker
+        r = requests.get(
+            f"{image_url}/v2/images",
+            headers=headers,
+            params=params,
+        )
+        r.raise_for_status()
+        body = r.json()
+        images = body.get("images") or []
+        all_images.extend(images)
+        if len(images) < 100:
+            break
+        marker = images[-1].get("id")
+        if not marker:
+            break
+    exact = [img for img in all_images if (img.get("name") or "").lower() == name_lower]
     if exact:
         candidates = exact
     else:
         candidates = [
-            img for img in images
+            img for img in all_images
             if name_lower in (img.get("name") or "").lower()
         ]
     if not candidates:
-        print(f"❌ 이미지를 찾을 수 없음: {image_ref}", file=sys.stderr)
+        print(f"❌ 이미지를 찾을 수 없음: {image_ref!r}", file=sys.stderr)
+        print("   NHN Cloud 콘솔 > Compute > 이미지 에서 Public 이미지 이름을 확인한 뒤,", file=sys.stderr)
+        print("   Repository 시크릿 NHN_IMAGE_NAME 을 해당 이름(또는 UUID)으로 업데이트하세요.", file=sys.stderr)
+        if all_images:
+            sample = [img.get("name") or img.get("id") for img in all_images[:5]]
+            print(f"   (참고: 조회된 이미지 예시: {sample})", file=sys.stderr)
         sys.exit(1)
     # 여러 개면 created_at 최신 순 (없으면 맨 뒤)
     candidates.sort(key=lambda img: img.get("created_at") or "", reverse=True)

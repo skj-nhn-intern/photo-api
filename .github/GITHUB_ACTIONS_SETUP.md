@@ -202,6 +202,31 @@ curl -s -H "X-Auth-Token: $TOKEN" \
 
 ## 트러블슈팅
 
+### ❌ 이미지를 찾을 수 없음 (Create build instance 단계)
+
+**증상**: `❌ 이미지를 찾을 수 없음: ***` 직후 `🔐 NHN Cloud 인증 중...` 이 나오고 Process completed with exit code 1
+
+**원인**: 인증은 성공했지만, **NHN_IMAGE_NAME** 시크릿에 넣은 **이미지 이름**이 NHN Cloud Public 이미지 목록에서 조회되지 않음.
+
+**갑자기 실패하는 경우**:
+- NHN Cloud가 Public 이미지 목록/이름을 갱신했을 수 있음 (예: 새 Ubuntu 버전으로 교체)
+- 시크릿 값에 앞뒤 공백·줄바꿈이 들어갔을 수 있음 (GitHub Secret 붙여넣기 시)
+
+**해결 방법**:
+1. **NHN Cloud 콘솔** > Compute > 이미지 → **Public** 이미지 목록에서 사용할 이미지의 **이름**을 확인 (정확히 동일하게 입력).
+2. **Repository Secret** `NHN_IMAGE_NAME` 을 해당 이름으로 업데이트. 예: `Ubuntu Server 22.04.5 LTS (2025.07.15)` (콘솔 2번째 컬럼 상세 이름 권장).
+3. 이름 대신 **이미지 UUID**를 넣어도 됨 (UUID면 API 이름 검색 없이 그대로 사용).
+4. 로컬에서 사용 가능한 이미지 이름 확인:
+   ```bash
+   # 위 "2. NHN Cloud 인스턴스 설정" 의 curl 예시로 토큰 발급 후
+   curl -s -H "X-Auth-Token: $TOKEN" \
+     "https://kr1-api-image-infrastructure.nhncloudservice.com/v2/images?visibility=public&limit=100" \
+     | jq -r '.images[] | .name'
+   ```
+   여기 나온 `name` 값 중 하나를 `NHN_IMAGE_NAME` 에 넣으세요.
+
+스크립트는 이제 Public 이미지를 **페이지네이션**으로 모두 조회하므로, 이미지가 100개를 넘어도 이름으로 찾을 수 있습니다.
+
 ### SSH 연결 실패
 
 **증상**: "Wait for SSH to be ready" 단계에서 타임아웃

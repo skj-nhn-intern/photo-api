@@ -35,9 +35,12 @@
 | `photo_api_validation_errors_total` | Counter | — | 요청 검증 실패(422) 횟수. RequestValidationError. 클라이언트 입력 문제와 서버 안정성 구분용 | RequestValidationError 핸들러에서 `.inc()` |
 | `photo_api_db_errors_total` | Counter | — | DB 세션/트랜잭션 에러 횟수 | `get_db()` 예외 시 `.inc()` |
 | `photo_api_external_request_errors_total` | Counter | `service` | 외부 API 호출 실패 횟수. service: `obs_api_server`, `cdn_api_server`, `log_api_server` | `record_external_request(service)` 예외 시 |
+| `photo_api_external_request_timeouts_total` | Counter | `service` | 외부 API 호출 **타임아웃** 횟수 (에러의 부분집합). service별 타임아웃 모니터링·알람용 | `record_external_request()` 내부에서 `httpx.TimeoutException`/`asyncio.TimeoutError` 발생 시; Log 서비스는 최종 재시도 실패 시 타임아웃이면 수동 `.inc()` |
 | `photo_api_external_request_total` | Counter | `service`, `status` | 외부 API 요청 수. status: `success` \| `failure` | `record_external_request()` 성공/실패 시 |
 
 **Slow query:** `photo_api_db_slow_queries_total`(임계 초과 쿼리 횟수), `photo_api_db_query_duration_seconds`(쿼리 지연 히스토그램)는 DB 쿼리 안정성·성능 추적용입니다. 느린 쿼리 **로그는 사용하지 않으며**, 메트릭만 수집합니다.
+
+**외부 서비스 타임아웃:** `photo_api_external_request_timeouts_total`는 `photo_api_external_request_errors_total`의 부분집합입니다. `record_external_request` 컨텍스트 안에서 `httpx.TimeoutException` 또는 `asyncio.TimeoutError`가 발생하면 두 메트릭 모두 증가합니다. CDN/OBS는 타임아웃 시 컨텍스트가 예외를 받아 처리하며, Log 서비스는 예외를 내부에서 잡으므로 최종 재시도 실패 시 타임아웃이면 `external_request_timeouts_total`을 수동으로 증가시킵니다. 타임아웃만 따로 알람 걸 때 사용하세요.
 
 ---
 

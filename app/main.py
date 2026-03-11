@@ -300,40 +300,27 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """
-    전역 예외 핸들러 - 트러블슈팅을 위한 풍부한 정보 수집.
-    
-    모든 처리되지 않은 예외를 캐치하여:
-    - 상세한 ERROR 로그 (스택 트레이스, 요청 컨텍스트 포함)
-    - 500 응답 반환
-    - Request ID 포함 (장애 추적용)
-    """
+def _make_500_response(request: Request, exc: Exception) -> JSONResponse:
+    """전역 예외 시 500 응답 및 로깅 공통 처리 (RuntimeError 재사용용)."""
     exc_type = type(exc).__name__
     exceptions_total.labels(exception_type=exc_type).inc()
     http_5xx_total.inc()
     rid = get_request_id()
     client_ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
-    
-    # 스택 트레이스 추출
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
     stack_trace = "".join(tb_lines)
-    
-    # 요청 본문 일부 추출 (너무 크면 제한)
     request_body = None
     try:
         if hasattr(request, "_body"):
             body = request._body
-            if body and len(body) < 1000:  # 1KB 이하만 로깅
+            if body and len(body) < 1000:
                 request_body = body.decode("utf-8", errors="ignore")[:500]
     except Exception:
         pass
-    
     log_error(
         "Unhandled exception occurred",
-        error_type=type(exc).__name__,
+        error_type=exc_type,
         error_message=str(exc),
         error_code="INTERNAL_SERVER_ERROR",
         http_method=request.method,
@@ -348,15 +335,51 @@ async def global_exception_handler(request: Request, exc: Exception):
         event="exception",
         exc_info=True,
     )
-    
-    # 클라이언트에게 Request ID 반환 (장애 추적용)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": "Internal server error",
-            "request_id": rid,  # 사용자가 이 ID로 문의 가능
-        },
+        content={"detail": "Internal server error", "request_id": rid},
     )
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request: Request, exc: RuntimeError):
+    """
+    RuntimeError 중 'No response returned.'는 클라이언트가 응답 전에 연결을 끊은 경우.
+    Starlette BaseHTTPMiddleware에서 발생하므로 499로 처리해 5xx와 구분한다.
+    """
+    if exc.args and exc.args[0] == "No response returned.":
+        rid = get_request_id()
+        log_warning(
+            "Client closed connection before response was sent",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            error_code="CLIENT_CLOSED_REQUEST",
+            http_method=request.method,
+            http_path=request.url.path,
+            http_status=499,
+            request_id=rid,
+            client_ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            event="exception",
+        )
+        return JSONResponse(
+            status_code=499,
+            content={"detail": "Client closed request.", "request_id": rid},
+        )
+    return _make_500_response(request, exc)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    전역 예외 핸들러 - 트러블슈팅을 위한 풍부한 정보 수집.
+    
+    모든 처리되지 않은 예외를 캐치하여:
+    - 상세한 ERROR 로그 (스택 트레이스, 요청 컨텍스트 포함)
+    - 500 응답 반환
+    - Request ID 포함 (장애 추적용)
+    """
+    return _make_500_response(request, exc)
 
 
 # Include routers
