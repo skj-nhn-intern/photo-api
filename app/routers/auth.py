@@ -3,10 +3,17 @@ Authentication router for user registration and login.
 """
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db
+from app.middlewares.rate_limit_middleware import get_rate_limit_decorator
+from app.models.user import User
+from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
+from app.services.auth import AuthService
+from app.dependencies.auth import get_current_active_user
+from app.utils.logger import log_info, log_warning, log_error
 from app.utils.prometheus_metrics import (
     login_duration_seconds,
     users_total,
@@ -14,14 +21,15 @@ from app.utils.prometheus_metrics import (
     user_login_total,
     user_access_total,
     new_user_registration_total,
+    rate_limit_requests_total,
 )
-from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
-from app.services.auth import AuthService
-from app.dependencies.auth import get_current_active_user
-from app.utils.logger import log_info, log_warning, log_error
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+# Rate limiting: 로그인/회원가입 브루트포스 방지 (IP당 분당 제한)
+auth_rate_limit = get_rate_limit_decorator(
+    f"{get_settings().rate_limit_auth_per_minute}/minute"
+)
 
 
 @router.post(
@@ -30,7 +38,9 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user",
 )
+@auth_rate_limit
 async def register(
+    request: Request,
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
@@ -41,6 +51,7 @@ async def register(
     - **username**: Username (3-100 characters, must be unique)
     - **password**: Password (8-100 characters)
     """
+    rate_limit_requests_total.labels(endpoint=request.url.path, status="allowed").inc()
     auth_service = AuthService(db)
     
     try:
@@ -79,7 +90,9 @@ async def register(
     response_model=Token,
     summary="Login to get access token",
 )
+@auth_rate_limit
 async def login(
+    request: Request,
     login_data: UserLogin,
     db: AsyncSession = Depends(get_db),
 ) -> Token:
@@ -92,6 +105,7 @@ async def login(
     Returns a JWT token that should be included in the Authorization header
     as `Bearer <token>` for authenticated endpoints.
     """
+    rate_limit_requests_total.labels(endpoint=request.url.path, status="allowed").inc()
     auth_service = AuthService(db)
     start = time.perf_counter()
     token = await auth_service.login(login_data.email, login_data.password)

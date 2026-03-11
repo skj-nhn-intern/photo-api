@@ -57,8 +57,10 @@ limiter.key_func = get_client_identifier
 
 def setup_rate_limit_exception_handler(app):
     """
-    Rate limit 초과 시 예외 처리 핸들러 등록.
+    Rate limit 초과 시 예외 처리 핸들러 등록 및 앱에 limiter 바인딩.
     """
+    app.state.limiter = limiter
+
     @app.exception_handler(RateLimitExceeded)
     async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         """

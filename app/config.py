@@ -178,6 +178,10 @@ class Settings(BaseSettings):
         default=10,
         description="IP당 분당 요청 수 제한 (공유 링크 엔드포인트)",
     )
+    rate_limit_auth_per_minute: int = Field(
+        default=10,
+        description="IP당 분당 요청 수 제한 (로그인/회원가입 엔드포인트, 브루트포스 방지)",
+    )
     rate_limit_image_per_minute: int = Field(
         default=120,
         description="IP당 분당 요청 수 제한 (이미지 접근 엔드포인트)",
