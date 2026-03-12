@@ -13,7 +13,7 @@
 - ✅ Python 3.11 + FastAPI + 의존성 패키지 설치
 - ✅ Promtail 바이너리 포함 (Loki 로깅)
 - ✅ Prometheus 메트릭 (/metrics 엔드포인트, 앱 내장)
-- ✅ systemd 서비스 자동 등록 및 활성화
+- ✅ systemd 서비스 자동 등록 및 활성화 (Gunicorn + Uvicorn Worker, max_requests/jitter)
 - ✅ 이미지 생성 및 테스트 인스턴스 검증
 - ✅ Health check 및 Prometheus metrics 확인
 - ✅ 자동 리소스 정리
@@ -112,7 +112,7 @@ gh workflow run build-and-test-image.yml -f skip_cleanup=true
 └── error.log
 
 /etc/systemd/system/
-├── photo-api.service       # 자동 시작 설정됨
+├── photo-api.service       # Gunicorn + Uvicorn Worker, 자동 시작 설정됨
 └── promtail.service        # 자동 시작 설정됨
 ```
 

@@ -22,7 +22,8 @@
 13. [DB 연결 풀](#13-db-연결-풀)
 14. [헬스체크](#14-헬스체크)
 15. [앱 식별 (setup 시 등록)](#15-앱-식별)
-16. [Instrumentator (FastAPI)](#instrumentator-fastapi-메트릭) · [FastAPI 상태 모니터링 요약](#fastapi-상태-모니터링-요약)
+16. [Uvicorn 워커 프로세스](#16-uvicorn-워커-프로세스)
+17. [Instrumentator (FastAPI)](#instrumentator-fastapi-메트릭) · [FastAPI 상태 모니터링 요약](#fastapi-상태-모니터링-요약)
 
 ---
 
@@ -238,6 +239,20 @@
 
 ---
 
+## 16. Uvicorn 워커 프로세스
+
+멀티 워커(`--workers N`) 구동 시, `/metrics` 스크래핑 요청은 한 번에 한 워커만 응답합니다. 아래 메트릭으로 **현재 응답한 워커**의 PID·기동 시각과 **설정된 워커 수**를 확인할 수 있습니다.
+
+| 메트릭 이름 | 타입 | 라벨 | 설명 | 갱신 시점 |
+|-------------|------|------|------|------------|
+| `photo_api_uvicorn_worker_info` | Gauge | `pid` | 이 프로세스(워커) 식별. 값 1, 라벨 pid=OS PID. 스크래핑 시 응답한 워커 1개의 정보만 노출 | setup_prometheus(app) 호출 시(프로세스당 1회) |
+| `photo_api_uvicorn_worker_start_time_seconds` | Gauge | — | 이 워커 프로세스 기동 시각(Unix 초). 워커 업타임: `time() - photo_api_uvicorn_worker_start_time_seconds` | setup_prometheus(app) 호출 시 |
+| `photo_api_uvicorn_workers_configured` | Gauge | — | 설정된 Uvicorn 워커 수 (UVICORN_WORKERS / config) | setup_prometheus(app) 호출 시 |
+
+**해석:** 멀티 워커 환경에서 스크래핑을 반복하면 서로 다른 `pid`를 가진 시리즈가 수집됩니다. `count(photo_api_uvicorn_worker_info)`로 (스크래핑에 의해 관측된) 워커 수를 추정할 수 있고, `photo_api_uvicorn_workers_configured`와 비교해 기대 워커 수와 대조할 수 있습니다.
+
+---
+
 ## Circuit Breaker 메트릭
 
 외부 서비스 호출에 Circuit Breaker를 사용할 때 다음 메트릭이 사용됩니다.
@@ -278,6 +293,7 @@ FastAPI/앱 상태를 보기 위해 사용할 수 있는 지표는 다음과 같
 | **처리 중 요청 수** | `photo_api_in_flight_requests` | Graceful shutdown·과부하 판단 |
 | **인증된 동시 요청** | `photo_api_active_sessions` | 동시 로그인 사용자 규모 |
 | **앱 식별** | `photo_api_app_info` | node, version, environment, region |
+| **워커 프로세스** | `photo_api_uvicorn_worker_info`, `photo_api_uvicorn_worker_start_time_seconds`, `photo_api_uvicorn_workers_configured` | 멀티 워커 시 응답한 워커의 pid·기동 시각·설정 워커 수 |
 | **요청 수·지연** | `http_requests_total`, `http_request_duration_seconds` | Instrumentator 자동 수집 |
 | **미처리 예외(유형별)** | `photo_api_exceptions_total` (라벨: `exception_type`) | 안정성 |
 | **5xx 횟수** | `photo_api_http_5xx_total` | 안정성 |

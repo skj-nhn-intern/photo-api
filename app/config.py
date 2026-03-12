@@ -269,26 +269,25 @@ class Settings(BaseSettings):
     # 로그 디렉터리. 비우면 /var/log/photo-api 사용, 쓰기 실패 시 ./logs 로 fallback
     log_dir: str = Field(default="", description="로그 파일 디렉터리 (비우면 /var/log/photo-api, 권한 없으면 ./logs)")
     
-    # Uvicorn server settings (connection 처리량 향상)
-    uvicorn_workers: int = Field(
+    # Gunicorn + Uvicorn Worker (프로덕션: systemd/스크립트에서 GUNICORN_* 사용)
+    gunicorn_workers: int = Field(
         default=4,
-        description="Uvicorn worker processes 수 (멀티프로세싱). CPU 코어 수와 동일하게 설정 권장"
+        description="Gunicorn worker 수 (CPU 코어 수와 동일 권장)"
     )
+    gunicorn_max_requests: int = Field(
+        default=20000,
+        description="Gunicorn worker당 최대 요청 수 후 재시작 (메모리 누수 방지)"
+    )
+    gunicorn_max_requests_jitter: int = Field(
+        default=2000,
+        description="max_requests에 더하는 랜덤 jitter (워커 동시 재시작 방지)"
+    )
+    gunicorn_keep_alive: int = Field(default=5, description="Gunicorn keep-alive (초)")
+    gunicorn_timeout: int = Field(default=120, description="Gunicorn worker timeout (초)")
+    # Uvicorn worker 내부 설정 (워커당 동시 연결 제한)
     uvicorn_limit_concurrency: int = Field(
         default=2000,
-        description="Uvicorn 최대 동시 연결 수 (concurrent connections)"
-    )
-    uvicorn_limit_max_requests: int = Field(
-        default=20000,
-        description="Uvicorn worker당 최대 요청 수 (메모리 누수 방지용, 0이면 미사용)"
-    )
-    uvicorn_limit_max_requests_jitter: int = Field(
-        default=2000,
-        description="최대 요청 수에 더하는 랜덤 값 (워커가 동시에 재시작되지 않도록, 0이면 미사용)"
-    )
-    uvicorn_timeout_keep_alive: int = Field(
-        default=5,
-        description="Uvicorn keep-alive 타임아웃 (초)"
+        description="Uvicorn worker 최대 동시 연결 수 (concurrent connections)"
     )
     
     # Loki (미사용·호환용). 로그는 Promtail로만 전송하므로 이 값은 사용하지 않음

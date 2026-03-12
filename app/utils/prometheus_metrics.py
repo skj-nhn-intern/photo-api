@@ -10,6 +10,7 @@ Prometheus metrics for stability, high availability, and performance.
 """
 import asyncio
 import logging
+import os
 import socket
 import time
 from contextlib import asynccontextmanager
@@ -146,6 +147,24 @@ ready = Gauge(
 app_start_time_seconds = Gauge(
     "photo_api_app_start_time_seconds",
     "Unix timestamp when application became ready (for uptime: time() - this value)",
+    registry=REGISTRY,
+)
+
+# --- Uvicorn worker process (멀티 워커 시 스크래핑당 한 워커만 응답, pid로 워커 구분) ---
+uvicorn_worker_info = Gauge(
+    "photo_api_uvicorn_worker_info",
+    "Uvicorn worker process identity (1 per process; label pid = OS PID). Scrape sees one worker per request.",
+    ["pid"],
+    registry=REGISTRY,
+)
+uvicorn_worker_start_time_seconds = Gauge(
+    "photo_api_uvicorn_worker_start_time_seconds",
+    "Unix timestamp when this worker process started (worker uptime: time() - this value)",
+    registry=REGISTRY,
+)
+uvicorn_workers_configured = Gauge(
+    "photo_api_uvicorn_workers_configured",
+    "Configured number of workers (Gunicorn: GUNICORN_WORKERS / config)",
     registry=REGISTRY,
 )
 
@@ -971,6 +990,11 @@ def setup_prometheus(app) -> None:
         environment=settings.environment.value,
         region=(settings.region or "").strip() or "unknown",
     ).set(1)
+
+    # Uvicorn worker process identity (이 프로세스 = 현재 워커 1개)
+    uvicorn_worker_info.labels(pid=str(os.getpid())).set(1)
+    uvicorn_worker_start_time_seconds.set(int(time.time()))
+    uvicorn_workers_configured.set(settings.gunicorn_workers)
 
     # Log queue size (custom collector)
     REGISTRY.register(LogQueueSizeCollector())

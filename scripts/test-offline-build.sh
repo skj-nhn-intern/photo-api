@@ -115,7 +115,7 @@ echo "================================================"
 echo "🔍 설치된 패키지 확인 중..."
 echo ""
 echo "주요 패키지:"
-test-venv/bin/pip list | grep -E '(fastapi|uvicorn|sqlalchemy|boto3|prometheus-client)' || true
+test-venv/bin/pip list | grep -E '(fastapi|uvicorn|gunicorn|sqlalchemy|boto3|prometheus-client)' || true
 
 echo ""
 echo "📊 통계:"
@@ -136,6 +136,7 @@ import sys
 modules_to_test = [
     'fastapi',
     'uvicorn',
+    'gunicorn',
     'sqlalchemy',
     'pydantic',
     'boto3',

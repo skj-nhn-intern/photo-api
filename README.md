@@ -140,9 +140,16 @@ NHN_LOG_URL=https://api-logncrash.nhncloudservice.com/v2/log
 
 ### 4. 서버 실행
 
+**개발 (로컬):**
 ```bash
 uvicorn app.main:app --reload
 ```
+
+**프로덕션 (Gunicorn + Uvicorn Worker, max_requests + jitter):**
+```bash
+gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4 --max-requests 20000 --max-requests-jitter 2000 --keep-alive 5 --timeout 120
+```
+배포 시에는 `scripts/2-setup-photo-api.sh`로 systemd 서비스가 위 설정으로 등록됩니다.
 
 서버가 시작되면 http://localhost:8000 에서 접근할 수 있습니다.
 

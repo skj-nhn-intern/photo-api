@@ -137,10 +137,10 @@ Prometheus 메트릭:
 - `photo_api_db_pool_active_connections`: 활성 DB 연결 수 (pool_size + overflow, 음수 시 0으로 클램프)
 - `photo_api_db_pool_waiting_requests`: overflow로 생성된 연결 수 (풀 초과 연결 수, **대기 중인 요청 수 아님**. 내부 이슈로 음수 나올 수 있어 0 미만은 0으로 클램프)
 
-### 2. Uvicorn 연결 모니터링
+### 2. Uvicorn 워커·요청 모니터링
 
-- `uvicorn_connections_active`: 활성 연결 수
-- `uvicorn_connections_accepted`: 수락된 총 연결 수
+- **워커 프로세스**: `photo_api_uvicorn_worker_info` (라벨 `pid`), `photo_api_uvicorn_worker_start_time_seconds`, `photo_api_uvicorn_workers_configured` — 워커 식별·기동 시각·설정 워커 수 (자세한 내용은 [METRICS-REFERENCE.md](monitoring/METRICS-REFERENCE.md#16-uvicorn-워커-프로세스) 참고).
+- **동시 처리 요청 수**: `photo_api_in_flight_requests` — 현재 처리 중인 요청 수(워커당). Uvicorn은 연결 수 메트릭을 기본 제공하지 않으며, 요청 단위 지표로 이 메트릭을 사용할 수 있음.
 
 ### 3. 성능 지표 확인
 

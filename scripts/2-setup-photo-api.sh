@@ -41,8 +41,8 @@ id -u photo-api &>/dev/null || useradd -r -s /usr/sbin/nologin -d "$SERVICE_HOME
 chown -R photo-api:photo-api "$SERVICE_HOME" /var/log/photo-api 2>/dev/null || chown -R root:root "$SERVICE_HOME" /var/log/photo-api
 
 echo "[4/6] Python 가상환경 및 의존성 설치..."
-if [[ -x "$SERVICE_HOME/venv/bin/uvicorn" ]]; then
-  echo "  venv 이미 존재(uvicorn 있음), pip 설치 생략"
+if [[ -x "$SERVICE_HOME/venv/bin/gunicorn" ]] && [[ -x "$SERVICE_HOME/venv/bin/uvicorn" ]]; then
+  echo "  venv 이미 존재(gunicorn/uvicorn 있음), pip 설치 생략"
 else
   "${PYTHON3_11:-python3.11}" -m venv "$SERVICE_HOME/venv"
   "$SERVICE_HOME/venv/bin/pip" install --upgrade pip -q
@@ -50,26 +50,20 @@ else
 fi
 
 echo "[5/6] systemd 서비스 유닛 설치..."
-# uvicorn 설정값 읽기 (환경변수 또는 기본값)
-UVICORN_WORKERS="${UVICORN_WORKERS:-4}"
-UVICORN_LIMIT_CONCURRENCY="${UVICORN_LIMIT_CONCURRENCY:-2000}"
-UVICORN_LIMIT_MAX_REQUESTS="${UVICORN_LIMIT_MAX_REQUESTS:-20000}"
-UVICORN_LIMIT_MAX_REQUESTS_JITTER="${UVICORN_LIMIT_MAX_REQUESTS_JITTER:-2000}"
-UVICORN_TIMEOUT_KEEP_ALIVE="${UVICORN_TIMEOUT_KEEP_ALIVE:-5}"
+# Gunicorn + Uvicorn worker 설정 (환경변수 또는 기본값)
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-${UVICORN_WORKERS:-4}}"
+GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-${UVICORN_LIMIT_MAX_REQUESTS:-20000}}"
+GUNICORN_MAX_REQUESTS_JITTER="${GUNICORN_MAX_REQUESTS_JITTER:-${UVICORN_LIMIT_MAX_REQUESTS_JITTER:-2000}}"
+GUNICORN_KEEP_ALIVE="${GUNICORN_KEEP_ALIVE:-${UVICORN_TIMEOUT_KEEP_ALIVE:-5}}"
+GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-120}"
+# Uvicorn worker용 (워커 내부 limit-concurrency 등)
+export UVICORN_LIMIT_CONCURRENCY="${UVICORN_LIMIT_CONCURRENCY:-2000}"
 
-# uvicorn 명령어 구성
-UVICORN_CMD="/opt/photo-api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
-if [[ "$UVICORN_WORKERS" -gt 1 ]]; then
-  UVICORN_CMD="$UVICORN_CMD --workers $UVICORN_WORKERS"
-fi
-UVICORN_CMD="$UVICORN_CMD --limit-concurrency $UVICORN_LIMIT_CONCURRENCY"
-if [[ "$UVICORN_LIMIT_MAX_REQUESTS" -gt 0 ]]; then
-  UVICORN_CMD="$UVICORN_CMD --limit-max-requests $UVICORN_LIMIT_MAX_REQUESTS"
-  if [[ "${UVICORN_LIMIT_MAX_REQUESTS_JITTER:-0}" -gt 0 ]]; then
-    UVICORN_CMD="$UVICORN_CMD --limit-max-requests-jitter $UVICORN_LIMIT_MAX_REQUESTS_JITTER"
-  fi
-fi
-UVICORN_CMD="$UVICORN_CMD --timeout-keep-alive $UVICORN_TIMEOUT_KEEP_ALIVE"
+# Gunicorn 명령어 구성 (Uvicorn Worker 사용, max_requests + jitter)
+GUNICORN_CMD="$SERVICE_HOME/venv/bin/gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"
+GUNICORN_CMD="$GUNICORN_CMD --workers $GUNICORN_WORKERS"
+GUNICORN_CMD="$GUNICORN_CMD --max-requests $GUNICORN_MAX_REQUESTS --max-requests-jitter $GUNICORN_MAX_REQUESTS_JITTER"
+GUNICORN_CMD="$GUNICORN_CMD --keep-alive $GUNICORN_KEEP_ALIVE --timeout $GUNICORN_TIMEOUT"
 
 cat > /etc/systemd/system/photo-api.service << SVC
 [Unit]
@@ -82,8 +76,9 @@ User=photo-api
 Group=photo-api
 WorkingDirectory=/opt/photo-api
 Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="UVICORN_LIMIT_CONCURRENCY=$UVICORN_LIMIT_CONCURRENCY"
 EnvironmentFile=/opt/photo-api/.env
-ExecStart=$UVICORN_CMD
+ExecStart=$GUNICORN_CMD
 Restart=always
 RestartSec=5
 StandardOutput=journal
