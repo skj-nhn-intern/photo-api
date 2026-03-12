@@ -279,8 +279,12 @@ class Settings(BaseSettings):
         description="Uvicorn 최대 동시 연결 수 (concurrent connections)"
     )
     uvicorn_limit_max_requests: int = Field(
-        default=10000,
-        description="Uvicorn worker당 최대 요청 수 (메모리 누수 방지용, 0이면 무제한)"
+        default=20000,
+        description="Uvicorn worker당 최대 요청 수 (메모리 누수 방지용, 0이면 미사용)"
+    )
+    uvicorn_limit_max_requests_jitter: int = Field(
+        default=2000,
+        description="최대 요청 수에 더하는 랜덤 값 (워커가 동시에 재시작되지 않도록, 0이면 미사용)"
     )
     uvicorn_timeout_keep_alive: int = Field(
         default=5,

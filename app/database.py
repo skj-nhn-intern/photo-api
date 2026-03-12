@@ -5,7 +5,7 @@ Implements proper connection pooling to prevent memory leaks.
 
 로깅 최적화:
 - SQL echo 비활성화 (운영 노이즈 방지)
-- 느린 쿼리 로깅 (1초 이상)
+- 느린 쿼리: 메트릭만 수집 (로그 없음)
 - 커넥션 풀 에러 로깅
 """
 import logging

@@ -220,9 +220,10 @@ jobs:
           
           # systemd 서비스 생성
           # uvicorn 설정값 읽기 (환경변수 또는 기본값)
-          UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
-          UVICORN_LIMIT_CONCURRENCY="${UVICORN_LIMIT_CONCURRENCY:-1000}"
-          UVICORN_LIMIT_MAX_REQUESTS="${UVICORN_LIMIT_MAX_REQUESTS:-10000}"
+          UVICORN_WORKERS="${UVICORN_WORKERS:-4}"
+          UVICORN_LIMIT_CONCURRENCY="${UVICORN_LIMIT_CONCURRENCY:-2000}"
+          UVICORN_LIMIT_MAX_REQUESTS="${UVICORN_LIMIT_MAX_REQUESTS:-20000}"
+          UVICORN_LIMIT_MAX_REQUESTS_JITTER="${UVICORN_LIMIT_MAX_REQUESTS_JITTER:-2000}"
           UVICORN_TIMEOUT_KEEP_ALIVE="${UVICORN_TIMEOUT_KEEP_ALIVE:-5}"
           
           # uvicorn 명령어 구성
@@ -233,6 +234,9 @@ jobs:
           UVICORN_CMD="$UVICORN_CMD --limit-concurrency $UVICORN_LIMIT_CONCURRENCY"
           if [[ "$UVICORN_LIMIT_MAX_REQUESTS" -gt 0 ]]; then
             UVICORN_CMD="$UVICORN_CMD --limit-max-requests $UVICORN_LIMIT_MAX_REQUESTS"
+            if [[ "${UVICORN_LIMIT_MAX_REQUESTS_JITTER:-0}" -gt 0 ]]; then
+              UVICORN_CMD="$UVICORN_CMD --limit-max-requests-jitter $UVICORN_LIMIT_MAX_REQUESTS_JITTER"
+            fi
           fi
           UVICORN_CMD="$UVICORN_CMD --timeout-keep-alive $UVICORN_TIMEOUT_KEEP_ALIVE"
           
@@ -249,15 +253,15 @@ jobs:
           Environment="PATH=/opt/photo-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
           EnvironmentFile=/opt/photo-api/.env
           ExecStart=$UVICORN_CMD
-          Restart=on-failure
+          Restart=always
           RestartSec=5
           StandardOutput=journal
           StandardError=journal
           SyslogIdentifier=photo-api
           ReadWritePaths=/var/log/photo-api
-          # 메모리 최적화: 메모리 제한 설정 (4GB RAM 환경 고려)
-          MemoryMax=3G
-          MemoryHigh=2.5G
+          # 메모리 최적화: 메모리 제한 설정 (8GB RAM 환경 고려)
+          MemoryMax=6G
+          MemoryHigh=5G
           # CPU 제한 (선택적, 4vCPU 환경 고려)
           CPUQuota=300%
 

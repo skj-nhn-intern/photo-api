@@ -117,8 +117,8 @@ backupCount=3
 
 **추가된 설정:**
 ```ini
-MemoryMax=3G
-MemoryHigh=2.5G
+MemoryMax=6G
+MemoryHigh=5G
 CPUQuota=300%
 ```
 
@@ -217,7 +217,7 @@ DATABASE_MAX_OVERFLOW=30     # 기본값 50에서 감소
 
 ### 문제: Photo API가 메모리를 과도하게 사용
 
-**증상:** `systemd-cgtop`에서 Photo API 메모리 사용량이 3GB를 초과
+**증상:** `systemd-cgtop`에서 Photo API 메모리 사용량이 6GB를 초과
 
 **해결:**
 1. Workers 수 감소 (`UVICORN_WORKERS=2`)

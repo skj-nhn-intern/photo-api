@@ -20,9 +20,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# 느린 응답 임계값 (ms)
-SLOW_REQUEST_THRESHOLD_MS = 3000
-
 # Request ID 헤더 이름
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -37,13 +34,12 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     기능:
     - Request ID 생성/전파 (장애 추적용)
     - 요청/응답 로깅 (구조화된 포맷)
-    - 에러 및 느린 요청 감지
+    - 에러 감지 (4xx WARNING, 5xx ERROR)
     
     로깅 기준 (운영 노이즈 최소화):
     - 5xx 에러 응답 → ERROR
     - 4xx 에러 응답 → WARNING
-    - 느린 응답 (3초 이상) → WARNING
-    - 정상 응답 → 로깅 안 함 (필요 시 INFO로 변경 가능)
+    - 정상/느린 응답 → 로깅 안 함 (디버깅 편의)
     """
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
@@ -110,20 +106,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                     request_id=rid,
                     event="request",
                 )
-            # 느린 응답 → WARNING (성능 문제 추적)
-            elif duration_ms >= SLOW_REQUEST_THRESHOLD_MS:
-                log_warning(
-                    "Slow request detected",
-                    http_method=request.method,
-                    http_path=request.url.path,
-                    http_status=status_code,
-                    duration_ms=duration_ms,
-                    client_ip=client_ip,
-                    user_agent=user_agent,
-                    request_id=rid,
-                    event="request",
-                    performance_issue=True,
-                )
+            # 느린 응답은 로깅하지 않음 (디버깅 시 노이즈 방지). 메트릭은 Instrumentator로 수집 가능.
             # 정상 응답은 로깅 안 함 (운영 노이즈 최소화)
             # 필요 시 아래 주석 해제하여 모든 요청 로깅 가능
             # else:

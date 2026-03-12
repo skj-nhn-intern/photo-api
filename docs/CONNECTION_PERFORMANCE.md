@@ -40,13 +40,10 @@ Uvicorn의 동시 연결 수와 worker 수를 조정합니다.
 **환경변수 설정:**
 ```bash
 # Worker processes 수 (멀티프로세싱)
-UVICORN_WORKERS=4              # 기본값: 1 (단일 프로세스)
+UVICORN_WORKERS=4              # 기본값: 4
 
 # 최대 동시 연결 수
-UVICORN_LIMIT_CONCURRENCY=2000 # 기본값: 1000
-
-# Worker당 최대 요청 수 (메모리 누수 방지)
-UVICORN_LIMIT_MAX_REQUESTS=10000 # 기본값: 10000
+UVICORN_LIMIT_CONCURRENCY=2000 # 기본값: 2000
 
 # Keep-alive 타임아웃 (초)
 UVICORN_TIMEOUT_KEEP_ALIVE=5   # 기본값: 5
@@ -58,14 +55,12 @@ UVICORN_TIMEOUT_KEEP_ALIVE=5   # 기본값: 5
 ```bash
 UVICORN_WORKERS=4
 UVICORN_LIMIT_CONCURRENCY=2000
-UVICORN_LIMIT_MAX_REQUESTS=10000
 ```
 
 **단일 서버 (8코어 CPU):**
 ```bash
 UVICORN_WORKERS=8
 UVICORN_LIMIT_CONCURRENCY=4000
-UVICORN_LIMIT_MAX_REQUESTS=10000
 ```
 
 **주의사항:**
